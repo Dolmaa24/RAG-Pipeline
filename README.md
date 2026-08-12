@@ -308,7 +308,7 @@ docker compose --profile ops up -d   # + flower on :5555
 A local model, if you want one:
 
 ```bash
-ollama serve && ollama pull llama3
+ollama pull llama3.2:3b
 ```
 
 Neither MongoDB nor a Groq key is required. Without Mongo, results go to
