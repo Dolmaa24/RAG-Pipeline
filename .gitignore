@@ -1,0 +1,43 @@
+# Secrets — never commit.
+# `.env` alone matches only that exact name, so a `.env.backup` or `.env.local`
+# holding the same credentials would sail straight into a commit. Ignore the
+# whole family and re-admit only the example, which has no real values in it.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Pipeline artifacts
+output/
+temp_media_audio*
+media_*/
+live_*/
+doc_*/
+ocr_*/
+*.mp3
+*.wav
+*.m4a
+
+# Model and browser caches
+.cache/
+huggingface/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

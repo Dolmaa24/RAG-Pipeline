@@ -1,0 +1,63 @@
+# Redis and MongoDB for local development — `docker compose up -d` and the
+# pipeline has everything it needs except Ollama, which runs natively on macOS
+# so it can reach Metal (a containerised Ollama would be CPU-only here).
+#
+# Flower is included for queue visibility but kept in a profile, so a plain
+# `up` starts only the two things the pipeline actually requires:
+#
+#     docker compose up -d                      # redis + mongo
+#     docker compose --profile ops up -d        # + flower on :5555
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: extractor-redis
+    ports:
+      - "6379:6379"
+    # Celery's broker holds job state. `appendonly` means a container restart
+    # does not silently drop everything that was queued.
+    command: redis-server --appendonly yes --save 60 1
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: extractor-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: ai_scraping_pipeline
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  flower:
+    image: mher/flower:2.0
+    container_name: extractor-flower
+    profiles: ["ops"]
+    ports:
+      - "5555:5555"
+    environment:
+      # host.docker.internal reaches the Redis published above from inside the
+      # container on macOS.
+      CELERY_BROKER_URL: redis://host.docker.internal:6379/0
+      FLOWER_PORT: "5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  mongo-data:
