@@ -52,11 +52,11 @@ with left:
     uploaded_file = st.file_uploader("Upload a document", type=["pdf", "docx", "png", "jpg", "jpeg", "csv", "xlsx", "txt"])
     url = st.text_input("Or enter a URL", "https://quotes.toscrape.com/")
     
-    prompt = st.text_area("What to extract", "Extract the main items and their key fields.")
+    prompt = st.text_area("What to extract", "Extract the main items and their key fields.", height=120)
     schema_text = st.text_area(
         "Schema",
         json.dumps({"title": "string", "summary": "string"}, indent=2),
-        height=160,
+        height=300,
     )
 
     with st.expander("Options"):
@@ -202,6 +202,9 @@ with right:
                         for child in result["children"]:
                             with st.expander(child["url"].split("!/")[-1]):
                                 st.json(child.get("extracted_data") or {"error": child.get("error")})
+
+                    with st.expander("Run report"):
+                        st.json(result)
 
                     break
                 elif status == "FAILURE":

@@ -316,6 +316,20 @@ Neither MongoDB nor a Groq key is required. Without Mongo, results go to
 
 ## Running
 
+### Pre-flight Checks
+Before starting the pipeline, ensure your background services are actually running. If you're running locally without Docker:
+
+```bash
+# 1. Check if Redis is running (should answer PONG)
+redis-cli ping
+
+# 2. Check if Ollama is running and has the model
+ollama list
+```
+If Redis is down, Celery workers will fail to connect. If Ollama is down, extraction will time out. *(If you're using Docker for infrastructure, `docker ps` will show if Redis and Mongo are up.)*
+
+### Starting the Pipeline
+
 ```bash
 ./run.sh                # both workers + API + dashboard; Ctrl-C stops all
 ./run.sh worker-io      # or start pieces individually
