@@ -77,6 +77,14 @@ class EngineConfig(BaseSettings):
     # Fetching
     # ------------------------------------------------------------------ #
     PROXY_URL: Optional[str] = None
+    #: Allow TLS handshakes with servers that predate RFC 5746 secure
+    #: renegotiation. OpenSSL 3 refuses those outright, which is why a site can
+    #: load in curl (LibreSSL on macOS is lenient) yet fail here with
+    #: "UNSAFE_LEGACY_RENEGOTIATION_DISABLED". Off by default: it re-opens the
+    #: renegotiation MITM window (CVE-2009-3555) for whoever is on the path.
+    #: Turn it on when a specific site you trust needs it — a fair number of
+    #: government and university sites run TLS stacks that old.
+    TLS_ALLOW_LEGACY_RENEGOTIATION: bool = False
     USE_BROWSER_FALLBACK: bool = True
     STATIC_TIMEOUT: float = 20.0
     BROWSER_TIMEOUT_MS: int = 30000
@@ -120,7 +128,7 @@ class EngineConfig(BaseSettings):
 
     LLM_BACKEND: Literal["auto", "ollama", "groq"] = "auto"
     OLLAMA_HOST: str = "http://localhost:11434"
-    AI_MODEL_NAME: str = "llama3"
+    AI_MODEL_NAME: str = "llama3.2:3b"
     AI_TIMEOUT: float = 300.0
     GROQ_API_KEY: Optional[str] = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"

@@ -38,6 +38,7 @@ from errors import (
     TransientFetchError,
 )
 from models import ExtractionItem, FetchMode, Stage
+from nettls import client_context, explain
 from observability import get_logger, metrics
 from pipeline.compliance import policy as default_policy
 from urls import canonicalize, host_of, is_http_url
@@ -233,6 +234,7 @@ class ResilientFetcher:
             "http2": True,
             "follow_redirects": False,  # handled above, so every hop is checked
             "timeout": config.STATIC_TIMEOUT,
+            "verify": client_context(),
         }
         if config.PROXY_URL:
             client_kwargs["proxy"] = config.PROXY_URL
@@ -268,7 +270,7 @@ class ResilientFetcher:
             except httpx.TimeoutException as exc:
                 raise TransientFetchError(f"timed out after {config.STATIC_TIMEOUT:.0f}s", url=url) from exc
             except httpx.TransportError as exc:
-                raise TransientFetchError(f"{type(exc).__name__}: {exc}", url=url) from exc
+                raise TransientFetchError(explain(exc), url=url) from exc
 
         if config.DETECT_BLOCKS:
             signal = detect_block(status, response_headers, body)

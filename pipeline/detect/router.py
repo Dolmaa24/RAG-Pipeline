@@ -150,8 +150,9 @@ class URLRouter:
             import httpx
 
             from config import config
+            from nettls import client_context
 
-            with httpx.Client(timeout=5.0, follow_redirects=True) as client:
+            with httpx.Client(timeout=5.0, follow_redirects=True, verify=client_context()) as client:
                 response = client.head(url, headers={"User-Agent": config.user_agent})
                 content_type = response.headers.get("content-type", "").lower()
                 if content_type.startswith(("video/", "audio/")):

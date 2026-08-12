@@ -35,6 +35,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from config import config
+from nettls import client_context, explain
 from observability import get_logger
 from urls import origin_of
 
@@ -248,7 +249,13 @@ class RobotsGate:
         """
         headers = {"User-Agent": config.user_agent, "Accept": "text/plain,*/*;q=0.5"}
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            # Same TLS context as the fetcher. If these two disagree, robots.txt
+            # can fail its handshake while the page succeeds, and the crawl then
+            # runs under "unavailable, allowing by configuration" — a permission
+            # nobody granted.
+            with httpx.Client(
+                timeout=self.timeout, follow_redirects=True, verify=client_context()
+            ) as client:
                 with client.stream("GET", robots_url, headers=headers) as response:
                     body = bytearray()
                     for chunk in response.iter_bytes():
@@ -256,7 +263,8 @@ class RobotsGate:
                         if len(body) >= _MAX_ROBOTS_BYTES:
                             break
                     return response.status_code, bytes(body[:_MAX_ROBOTS_BYTES])
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            log.warning("robots.fetch_failed", url=robots_url, error=explain(exc))
             return None, b""
 
 
