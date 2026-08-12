@@ -15,8 +15,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from celery.result import AsyncResult
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
+import shutil
+import uuid
+from pathlib import Path
 
 from celery_app import celery_app
 from config import config
@@ -39,6 +43,19 @@ app = FastAPI(
 )
 
 db = CloudDatabase()
+
+UPLOAD_DIR = Path("output/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+@app.post("/api/v1/upload", tags=["extract"])
+def upload_file(file: UploadFile = File(...)):
+    ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "bin"
+    file_id = f"{uuid.uuid4().hex}.{ext}"
+    dest = UPLOAD_DIR / file_id
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"url": f"http://127.0.0.1:8000/uploads/{file_id}"}
 
 
 # --------------------------------------------------------------------------- #

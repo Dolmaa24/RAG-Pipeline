@@ -569,7 +569,7 @@ class SpecStore:
             return None if cached.is_stale else cached
 
         doc = None
-        if self._db is not None:
+        if self._db is not None and self._db.is_configured:
             try:
                 doc = self._db.specs_collection().find_one({"_id": key})
             except Exception as exc:
@@ -587,7 +587,7 @@ class SpecStore:
 
     def put(self, spec: SelectorSpec) -> None:
         self._memory[spec.key] = spec
-        if self._db is None:
+        if self._db is None or not self._db.is_configured:
             return
         try:
             self._db.specs_collection().replace_one(
@@ -602,7 +602,7 @@ class SpecStore:
         self._memory[spec.key] = spec
         log.warning("specs.retired", domain=spec.domain, reason=reason,
                     fill_rate=round(spec.avg_fill_rate, 2))
-        if self._db is None:
+        if self._db is None or not self._db.is_configured:
             return
         try:
             self._db.specs_collection().update_one(
@@ -626,7 +626,7 @@ class SpecStore:
         if self._learn_failures.get(key, 0) >= MAX_LEARN_ATTEMPTS:
             return False
 
-        if self._db is not None and key not in self._learn_failures:
+        if self._db is not None and self._db.is_configured and key not in self._learn_failures:
             try:
                 doc = self._db.specs_collection().find_one({"_id": key}, {"learn_attempts": 1})
             except Exception:
@@ -644,7 +644,7 @@ class SpecStore:
 
         if attempts >= MAX_LEARN_ATTEMPTS:
             log.info("specs.learning_abandoned", domain=domain, prefix=prefix, attempts=attempts)
-        if self._db is None:
+        if self._db is None or not self._db.is_configured:
             return
         try:
             self._db.specs_collection().update_one(
@@ -664,7 +664,7 @@ class SpecStore:
             log.debug("specs.failure_record_failed", error=repr(exc))
 
     def all(self, limit: int = 200) -> list[dict]:
-        if self._db is None:
+        if self._db is None or not self._db.is_configured:
             return [spec.to_dict() for spec in list(self._memory.values())[:limit]]
         try:
             return list(self._db.specs_collection().find().limit(limit))

@@ -127,8 +127,10 @@ def canonicalize(
         netloc = f"{userinfo}@{netloc}"
 
     path = parts.path or "/"
+    # Normalize backslashes to forward slashes before canonicalizing
+    path = unquote(path).replace("\\", "/")
     # Re-encode so %2f and %2F, and encoded-but-safe characters, agree.
-    path = quote(unquote(path), safe="/:@!$&'()*+,;=~-._")
+    path = quote(path, safe="/:@!$&'()*+,;=~-._")
     path = _DEFAULT_INDEX.sub("/", path)
     if not path.startswith("/"):
         path = "/" + path

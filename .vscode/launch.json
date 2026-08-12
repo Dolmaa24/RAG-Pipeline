@@ -1,0 +1,84 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Start here. No Redis, no Celery, no API — one process, so a traceback
+      // is a traceback and breakpoints land where you put them.
+      "name": "Batch: main.py (synchronous)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "args": ["https://quotes.toscrape.com/page/1/"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "justMyCode": false
+    },
+    {
+      "name": "API: uvicorn (reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "justMyCode": false
+    },
+    {
+      // --pool=solo, not threads: the debugger cannot follow a worker thread,
+      // and breakpoints inside tasks are the whole reason to run it this way.
+      // Slower, single-task-at-a-time, and correct for debugging.
+      "name": "Worker: io (debuggable, solo pool)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "celery",
+      "args": ["-A", "celery_app", "worker", "--queues=io", "--pool=solo", "--loglevel=info"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Worker: cpu (debuggable, solo pool)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "celery",
+      "args": ["-A", "celery_app", "worker", "--queues=cpu", "--pool=solo", "--loglevel=info"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
+        "CELERY_WORKER_QUEUE": "cpu"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Dashboard: streamlit",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": ["run", "dashboard.py"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "justMyCode": false
+    }
+  ],
+  "compounds": [
+    {
+      // Everything at once, for driving it from the dashboard or Swagger.
+      "name": "Full stack (API + both workers)",
+      "configurations": [
+        "API: uvicorn (reload)",
+        "Worker: io (debuggable, solo pool)",
+        "Worker: cpu (debuggable, solo pool)"
+      ],
+      "stopAll": true
+    }
+  ]
+}
