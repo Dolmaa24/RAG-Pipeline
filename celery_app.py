@@ -90,6 +90,9 @@ celery_app.conf.update(
         "tasks.process_media_scrape": {"queue": config.CPU_QUEUE},
         "tasks.capture_livestream": {"queue": config.CPU_QUEUE},
         "tasks.render_*": {"queue": config.CPU_QUEUE},
+        # Embedding is a transformer forward pass. On the io pool it would sit
+        # in a thread that sixteen fetches are waiting behind.
+        "tasks.index_*": {"queue": config.CPU_QUEUE},
     },
 
     # --- limits ----------------------------------------------------------- #
@@ -136,6 +139,13 @@ def _on_process_init(**_kwargs) -> None:
         preload()
     except Exception as exc:  # a worker must start even without audio support
         log.warning("worker.preload_failed", error=repr(exc))
+
+    # The embedding model is deliberately *not* preloaded here. Constructing it
+    # takes about six seconds, and billiard gives a forked child four to report
+    # UP before it kills it and starts another — which turns a preload into an
+    # endless loop of children that are killed while still loading. It is loaded
+    # on the first indexing task instead, and then held for the process's life,
+    # which `worker_max_tasks_per_child` amortises over 25 tasks.
 
 
 @worker_process_shutdown.connect

@@ -234,6 +234,79 @@ idempotency comes from the database rather than from application logic.
 
 ---
 
+## Indexing for retrieval
+
+Off by default. Turn it on and a document that finishes extraction is also
+cleaned, split, embedded and written to a local Chroma collection:
+
+```bash
+curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -d '{
+  "url": "https://example.com/report",
+  "prompt": "Extract the title.",
+  "schema_template": {"title": "string"},
+  "index": true
+}'
+```
+
+`INDEX_ENABLED=true` makes it the default for every job; `"index": true` turns
+it on per request, and `false` off again.
+
+**How a document gets split is decided from the document.** A page that
+publishes its own headings has already said how it wants to be divided, so those
+win. Text whose lines are too short to be prose is the OCR-damage case, and the
+only one worth a model call. Length on its own justifies splitting by meaning.
+Everything else gets fixed windows.
+
+| Shape | Strategy |
+|---|---|
+| Three or more markdown headings | `hierarchical` — split on headings, heading path kept as the section name |
+| Ten or more lines averaging under 50 characters | `llm` — a model repairs the text and splits it, falling back to `fixed` if no model is reachable |
+| Over 2000 characters of prose | `semantic` — split where the embedding similarity drops |
+| Anything else | `fixed` — overlapping character windows |
+
+A run report says which strategy *ran*, not which was chosen: when the model is
+unreachable the `llm` strategy falls back to fixed windows and reports `fixed`,
+because a number claiming a model ran on a machine where none did is worse than
+no number.
+
+**Indexing is a separate task on the cpu queue**, not a stage in the runner.
+Embedding is a transformer forward pass, and `extract_url` runs on the io pool
+where it would hold a thread that sixteen fetches are queued behind. It also
+means a vector store that is down cannot fail an extraction that already
+succeeded — the extraction returns, and the index task fails on its own.
+
+Every chunk carries provenance: source URL, content hash, page number, section
+path, language, which extraction tier produced the text, and which model
+embedded it.
+
+```bash
+PYTHONPATH=. ./venv/bin/python -c "from pipeline.store.chroma import ChromaStore; print(ChromaStore().count())"
+```
+
+**One collection holds one embedding space.** Cosine distance between a 384-d
+BGE vector and a 512-d CLIP vector is not a bigger or smaller number, it is a
+category error, and Chroma will not stop you — so the collection records which
+model wrote it and a mismatched write is refused. Use a separate
+`CHROMA_COLLECTION_NAME` per model.
+
+**Two macOS traps, on top of the ones below.** `MTLCompilerService` does not
+survive `fork()`: a prefork worker child that builds a Metal pipeline dies with
+`SIGABRT`, and `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` does not cover it — so
+inside a fork pool the embedding model is pinned to the CPU, where BGE-small
+embeds 32 chunks in about a quarter of a second anyway. And the model is *not*
+preloaded at process init: it takes about six seconds to construct and billiard
+kills a child that has not reported ready in four, so preloading it turns worker
+startup into an endless loop of half-loaded children. It loads on the first
+indexing task instead and stays resident — the first document costs ~11s, the
+next ~0.3s.
+
+What is not here yet: retrieval. Sparse term counts are written alongside every
+chunk and nothing reads them back, because ranking with them needs a
+corpus-level IDF pass that has not been built. `ChromaStore.search` is dense
+only, and there is no search endpoint.
+
+---
+
 ## Performance
 
 **The queues are split**, because the work has two shapes:
@@ -419,11 +492,18 @@ mode and validating here instead.
 PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 ```
 
-385 tests, all offline — HTTP via `respx`, robots.txt via an injected fetcher,
-no Ollama and no network required. They cover the safety gates (robots status
-handling, redirect re-checking, block detection, SSRF, archive bombs), type
-detection, every handler, the cascade's tier ordering, schema repair, the
-trust layer, and the crawler's termination properties.
+58 tests, all offline — no network, no Ollama, no model download. The dense
+embedder is faked where a test only needs *a* vector; the one test that loads
+BGE for real is marked `slow`:
+
+```bash
+PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q -m "not slow"
+```
+
+They cover the cleaning steps, the chunk router's four branches, the
+model-assisted splitter and each of its fallbacks, the dense embedder's
+one-load-per-process guarantee, fork-safe device selection, and the store's
+embedding-space guard.
 
 ## Layout
 
@@ -440,8 +520,13 @@ pipeline/
   transcribe/   mlx and faster-whisper behind one interface, plus a benchmark
   normalize/    text, dates, numbers
   trust/        validation, dedupe, drift
+  preprocess/   cleaning, encoding repair, language, optional PII masking
+  chunk/        the strategy router and the four splitters
+  embed/        dense (local/hosted), sparse, multimodal
+  store/        the Chroma collection
+  index/        preprocess -> chunk -> embed -> store, as one call
   runner.py     the pipeline itself
-tests/          385 offline tests
+tests/          58 offline tests; one marked `slow` loads the real model
 ```
 
 ## Notes and limitations
@@ -461,6 +546,13 @@ tests/          385 offline tests
 - Tier 1's field mapping uses a synonym table (`FIELD_SYNONYMS`). A schema using
   unusual field names may fall through to a later tier; adding a synonym is a
   one-line change.
+- Indexing writes sparse term counts that nothing reads. Ranking with them
+  needs corpus-level IDF, so retrieval today is dense-only and there is no
+  search endpoint — see "Indexing for retrieval".
+- `langchain-experimental` is sunset upstream. It is used for one thing,
+  `SemanticChunker`; replacing it means embedding sentences and cutting at a
+  percentile breakpoint, which is perhaps forty lines against the dense embedder
+  already loaded.
 - `GET /api/v1/stats` reads its tier breakdown from MongoDB, so without
   `MONGO_URI` it reports zeros. The cache and rate-limiter figures in the same
   response are per-process, and the API process is not the one doing the

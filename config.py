@@ -175,6 +175,43 @@ class EngineConfig(BaseSettings):
     DRIFT_FILL_RATE_DROP: float = 0.3
 
     # ------------------------------------------------------------------ #
+    # Phase 6 — indexing for retrieval
+    # ------------------------------------------------------------------ #
+    #: Off by default. Indexing loads a sentence-transformer and writes a vector
+    #: store, which is real memory and real disk that a caller who only wants
+    #: structured JSON should not be paying for.
+    INDEX_ENABLED: bool = False
+    #: "agentic" reads the document's shape and picks one of the others.
+    INDEX_CHUNK_STRATEGY: Literal[
+        "agentic", "fixed", "semantic", "hierarchical", "llm"
+    ] = "agentic"
+    #: Characters, not tokens. Distinct from MAX_CHUNK_SIZE, which is how much
+    #: text the *extraction* stage sends to a model — a different question.
+    INDEX_CHUNK_SIZE: int = 1000
+    INDEX_CHUNK_OVERLAP: int = 200
+    #: Ceiling on model calls for one document under the "llm" strategy. Without
+    #: it a long PDF becomes an unbounded number of calls.
+    INDEX_LLM_MAX_WINDOWS: int = 8
+    INDEX_DENSE_PROVIDER: Literal["local_bge", "local_e5", "cohere", "voyage"] = "local_bge"
+    #: "auto" uses CPU inside a prefork worker and lets torch choose elsewhere.
+    #: Metal does not survive fork() — see pipeline/embed/dense.py.
+    INDEX_EMBED_DEVICE: Literal["auto", "cpu", "mps", "cuda"] = "auto"
+    #: "tf" stores per-document term counts. Real BM25 needs corpus-level IDF,
+    #: which nothing computes yet — see pipeline/embed/sparse.py.
+    INDEX_SPARSE_PROVIDER: Literal["tf", "splade", "none"] = "tf"
+    #: Presidio loads a spaCy NER model, so this costs hundreds of MB the first
+    #: time it runs. Off by default, and the packages are not in requirements.
+    INDEX_PII_REMOVAL: bool = False
+    #: Cap on the text handed to one indexing task. Past this the tail is
+    #: dropped and a warning recorded rather than the broker carrying a payload
+    #: measured in megabytes.
+    INDEX_MAX_TEXT_CHARS: int = 400_000
+
+    CHROMA_PERSIST_DIR: str = "./chroma_data"
+    #: One collection per embedding model. A mismatched write is refused.
+    CHROMA_COLLECTION_NAME: str = "web_scraping_chunks"
+
+    # ------------------------------------------------------------------ #
     # Infrastructure
     # ------------------------------------------------------------------ #
     REDIS_URL: str = "redis://localhost:6379/0"

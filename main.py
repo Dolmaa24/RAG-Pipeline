@@ -81,9 +81,11 @@ def run_batch_pipeline(
             report.record(item)
             if item.ok:
                 results.append(item.summary())
+                _index(item)
             for child in item.children:
                 if child.ok:
                     results.append(child.summary())
+                    _index(child)
 
     report.metrics = metrics.snapshot()
     report.finish()
@@ -100,6 +102,35 @@ def run_batch_pipeline(
 
     _print_summary(report, results_path, report_path)
     return report
+
+
+def _index(item: ExtractionItem) -> None:
+    """Chunk, embed and store one item's text, if indexing is on.
+
+    The queued path enqueues ``tasks.index_document`` instead. Here there is no
+    broker, so the same facade is called directly — which is the point of it
+    being a facade: one code path, two transports.
+    """
+    if not config.INDEX_ENABLED:
+        return
+    text = item.text_for_extraction
+    if not text.strip() or item.metadata.get("duplicate_of"):
+        return
+    try:
+        from pipeline.index import index_text
+
+        index_text(
+            text[: config.INDEX_MAX_TEXT_CHARS],
+            source=item.canonical_url or item.url,
+            extra_metadata={
+                "content_hash": item.content_hash or "",
+                "kind": item.kind.value,
+                "extraction_tier": item.tier if item.tier is not None else -1,
+            },
+        )
+    except Exception as exc:
+        # A failed index must not cost you the extraction you already have.
+        log.warning("batch.index_failed", url=item.url, error=repr(exc))
 
 
 def _print_summary(report: RunReport, results_path: Path, report_path: Path) -> None:

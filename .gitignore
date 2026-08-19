@@ -40,3 +40,6 @@ huggingface/
 .DS_Store
 .idea/
 *.swp
+
+# Vector store
+chroma_data/

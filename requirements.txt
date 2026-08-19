@@ -66,3 +66,31 @@ pandas==3.0.5
 # --- Tests ---
 pytest==9.1.1
 respx==0.23.1
+
+# --- Indexing: preprocess, chunk, embed, store ---
+ftfy==6.3.1
+langdetect==1.0.9
+beautifulsoup4==4.15.0
+langchain-text-splitters==1.1.2
+# Sunset upstream and no longer maintained. Used only for SemanticChunker;
+# everything else here is first-party or langchain-text-splitters.
+langchain-experimental==0.4.2
+sentence-transformers==6.0.0
+chromadb==1.5.9
+
+# --- Optional, installed only if you turn the feature on ---
+# Every one of these serves a provider that is off by default, so none of them
+# is in the install above. The code raises a MissingDependency naming the exact
+# command when you enable the setting without the package.
+#
+# PII masking (INDEX_PII_REMOVAL=true) — also needs a spaCy model:
+#   pip install presidio-analyzer presidio-anonymizer
+#   python -m spacy download en_core_web_lg
+#
+# Hosted embedders (INDEX_DENSE_PROVIDER=cohere / voyage):
+#   pip install cohere voyageai
+#
+# SPLADE sparse embeddings (INDEX_SPARSE_PROVIDER=splade) — heavy, and disabled
+# by default on an 8 GB host:
+#   pip install accelerate 'optimum[onnxruntime]'
+

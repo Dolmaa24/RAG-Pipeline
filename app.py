@@ -90,6 +90,13 @@ class ExtractionRequest(BaseModel):
             "as jobs of their own. 0 means discover them but do not follow them."
         ),
     )
+    index: Optional[bool] = Field(
+        None,
+        description=(
+            "Chunk, embed and store the extracted text for retrieval. Runs as a "
+            "separate task on the cpu queue. null follows INDEX_ENABLED."
+        ),
+    )
 
     @field_validator("url")
     @classmethod
@@ -323,6 +330,7 @@ def extract(request: ExtractionRequest) -> dict:
                 force_dynamic=request.force_dynamic,
                 follow_children=request.follow_children,
                 fan_out=request.fan_out,
+                index=request.index,
                 **kwargs,
             )
     except Exception as exc:

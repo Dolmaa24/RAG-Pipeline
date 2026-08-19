@@ -105,6 +105,48 @@ def _fan_out(item: ExtractionItem, prompt: str, schema: dict, limit: int, **opti
     return queued
 
 
+def _enqueue_index(item: ExtractionItem, *, enabled: Optional[bool]) -> Optional[str]:
+    """Hand the finished text to the cpu queue for chunking and embedding.
+
+    Indexing is a task rather than a stage for two reasons. Embedding is a
+    transformer forward pass and this task runs on the io pool, where it would
+    occupy a thread that sixteen fetches are queued behind. And an extraction
+    that succeeded is a result the caller is owed — a vector store that is down,
+    or a model that will not load, must not turn it into a failure.
+    """
+    if not (config.INDEX_ENABLED if enabled is None else enabled):
+        return None
+    if not item.ok:
+        return None
+    if item.metadata.get("duplicate_of"):
+        # The runner already matched this text against the store. Indexing it
+        # again under fresh chunk ids would put two copies in front of retrieval.
+        log.info("task.index_skipped_duplicate", url=item.url)
+        return None
+
+    text = item.text_for_extraction
+    if not text.strip():
+        return None
+
+    try:
+        task = index_document.delay(
+            text[: config.INDEX_MAX_TEXT_CHARS],
+            source=item.canonical_url or item.url,
+            metadata={
+                "content_hash": item.content_hash or "",
+                "kind": item.kind.value,
+                "extraction_tier": item.tier if item.tier is not None else -1,
+                "job_id": item.job_id or "",
+            },
+        )
+    except Exception as exc:
+        log.warning("task.index_enqueue_failed", url=item.url, error=repr(exc))
+        return None
+
+    log.info("task.index_queued", url=item.url, task_id=task.id)
+    return task.id
+
+
 # --------------------------------------------------------------------------- #
 # The general task: anything with a URL
 # --------------------------------------------------------------------------- #
@@ -122,12 +164,17 @@ def extract_url(
     allowed_tiers: Optional[list[int]] = None,
     follow_children: bool = True,
     fan_out: int = 0,
+    index: Optional[bool] = None,
 ) -> dict:
     """Extract structured data from any URL: page, document, feed, archive, media.
 
     ``fan_out`` is how a feed or sitemap becomes a crawl: up to that many of the
     URLs it advertises are enqueued as their own tasks. It defaults to 0, so one
     submitted URL means one job unless you ask for more.
+
+    ``index`` overrides ``INDEX_ENABLED`` for this job: the extracted text is
+    chunked, embedded and written to the vector store by a separate cpu-queue
+    task. ``None`` means follow the configured default.
     """
     with job_context(self.request.id, url):
         try:
@@ -151,6 +198,11 @@ def extract_url(
             db.save_run(report)
 
             result = _result(report, item)
+
+            index_task_id = _enqueue_index(item, enabled=index)
+            if index_task_id:
+                item.metadata["index_task_id"] = index_task_id
+                result["index_task_id"] = index_task_id
 
             if fan_out > 0:
                 result["fanned_out"] = _fan_out(
@@ -492,6 +544,46 @@ def discover_sitemap(self, url: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Indexing: routed to the cpu queue, because embedding is a forward pass
+# --------------------------------------------------------------------------- #
+
+
+@celery_app.task(bind=True, name="tasks.index_document", **RETRY_KWARGS)
+def index_document(
+    self,
+    text: str,
+    *,
+    source: str,
+    metadata: Optional[dict] = None,
+    strategy: Optional[str] = None,
+    local_only: bool = False,
+) -> dict:
+    """Chunk, embed and store one document's text.
+
+    Enqueued by :func:`extract_url` after a successful extraction, and callable
+    on its own for text that did not come from a crawl. Thin, like every task
+    here: the work is in :func:`pipeline.index.index_text`.
+    """
+    with job_context(self.request.id, source):
+        try:
+            from pipeline.index import index_text
+
+            report = index_text(
+                text,
+                source=source,
+                extra_metadata=metadata or {},
+                strategy=strategy,
+                local_only=local_only,
+            )
+            return report.to_dict()
+        except SoftTimeLimitExceeded:
+            log.error("task.soft_timeout", url=source, task="index_document")
+            raise
+        finally:
+            gc.collect()
+
+
+# --------------------------------------------------------------------------- #
 # Backwards-compatible names
 # --------------------------------------------------------------------------- #
 
@@ -546,6 +638,7 @@ __all__ = [
     "extract_batch",
     "extract_media",
     "extract_url",
+    "index_document",
     "process_media_scrape_task",
     "process_web_scrape_task",
 ]
