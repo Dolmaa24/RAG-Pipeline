@@ -119,14 +119,18 @@ def _index(item: ExtractionItem) -> None:
     try:
         from pipeline.index import index_text
 
+        from pipeline.index.metadata import derive
+
+        metadata = {
+            "content_hash": item.content_hash or "",
+            "extraction_tier": item.tier if item.tier is not None else -1,
+        }
+        metadata.update(derive(item))
+
         index_text(
             text[: config.INDEX_MAX_TEXT_CHARS],
             source=item.canonical_url or item.url,
-            extra_metadata={
-                "content_hash": item.content_hash or "",
-                "kind": item.kind.value,
-                "extraction_tier": item.tier if item.tier is not None else -1,
-            },
+            extra_metadata=metadata,
         )
     except Exception as exc:
         # A failed index must not cost you the extraction you already have.

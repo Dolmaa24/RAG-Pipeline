@@ -19,9 +19,23 @@ class ChunkMetadata(BaseModel):
     source: str = ""
     page_no: int = -1
     section_name: str = ""
-    language: str = "unknown"
     chunk_strategy: str = "unknown"
     embedding_model: str = ""
+
+    # --- filterable ---
+    # Empty means "not known", which a filter reads as "do not exclude this".
+    # A document with no department is not in department "" — it is a document
+    # whose department nobody recorded, and filtering it out on that basis
+    # would hide it from every departmental query forever.
+    language: str = "unknown"
+    doc_type: str = ""
+    department: str = ""
+    #: ISO 8601. Sorts and compares as a string, and reads plainly in a log.
+    date: str = ""
+    author: str = ""
+    region: str = ""
+    permission_level: str = ""
+
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -33,9 +47,6 @@ class Chunk(BaseModel):
     metadata: ChunkMetadata
 
     dense_embedding: List[float] = Field(default_factory=list)
-    #: Term weights. Chroma stores only dense vectors, so this is serialised
-    #: into metadata at write time and is not searchable yet.
-    sparse_embedding: Dict[str, float] = Field(default_factory=dict)
 
 
 class ChunkedDocument(BaseModel):

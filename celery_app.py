@@ -93,6 +93,8 @@ celery_app.conf.update(
         # Embedding is a transformer forward pass. On the io pool it would sit
         # in a thread that sixteen fetches are waiting behind.
         "tasks.index_*": {"queue": config.CPU_QUEUE},
+        # Retrieval embeds the query and may load a cross-encoder. Same reason.
+        "tasks.search": {"queue": config.CPU_QUEUE},
     },
 
     # --- limits ----------------------------------------------------------- #

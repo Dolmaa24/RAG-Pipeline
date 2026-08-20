@@ -24,8 +24,8 @@ from observability import get_logger
 
 log = get_logger("embed.dense")
 
-#: Output width per provider, checked against the Chroma collection before a
-#: write. Mixing widths in one collection is silent nonsense, not an error.
+#: Output width per provider, checked against the stored table before a write.
+#: Mixing widths in one table is silent nonsense, not an error.
 DIMENSIONS = {
     "local_bge": 384,
     "local_e5": 384,
@@ -37,31 +37,29 @@ DIMENSIONS = {
 def select_device() -> Optional[str]:
     """Which torch device to put the model on. ``None`` lets torch decide.
 
-    **Metal does not survive fork().** A Celery prefork child that builds an MPS
-    compute pipeline aborts with ``MPSKernel ... Unable to reach
-    MTLCompilerService``, because the connection to Metal's compiler daemon is
-    not inherited across the fork. This is the same family of macOS trap as the
-    one ``OBJC_DISABLE_INITIALIZE_FORK_SAFETY`` defuses in
-    :mod:`celery_app` — and that variable does not cover this one.
+    **Metal keeps killing processes, so "auto" means CPU.** Measured here, in
+    two of the three contexts this model runs in:
 
-    So inside a fork pool the model goes on the CPU. BGE-small is 33M
-    parameters: a batch of 32 takes about a quarter of a second there, and it
-    leaves the GPU to Whisper, which genuinely needs it. Everywhere else — the
-    synchronous ``main.py`` path, a thread pool, a test — torch chooses, and on
-    this machine that means MPS.
+    * A Celery **prefork child** that builds an MPS compute pipeline aborts with
+      ``MPSKernel ... Unable to reach MTLCompilerService`` — the connection to
+      Metal's compiler daemon is not inherited across ``fork()``. This is the
+      same family of macOS trap that ``OBJC_DISABLE_INITIALIZE_FORK_SAFETY``
+      defuses in :mod:`celery_app`, and that variable does not cover it.
+    * The **uvicorn** process dies the same way on the first embedding call,
+      leaving only a leaked-semaphore warning and no traceback, because it is
+      killed by a signal rather than raising.
+
+    Only the synchronous ``main.py`` path survives MPS reliably. Given that
+    BGE-small is 33M parameters — a batch of 32 takes about a quarter of a
+    second on the CPU — the GPU is not worth a crash. It stays free for Whisper,
+    which genuinely needs it.
+
+    Set ``INDEX_EMBED_DEVICE=mps`` to force it in a context you have verified.
     """
     configured = config.INDEX_EMBED_DEVICE
     if configured != "auto":
         return configured
-
-    try:
-        from billiard.process import current_process
-
-        if current_process().name.startswith("ForkPoolWorker"):
-            return "cpu"
-    except Exception:  # not running under Celery at all
-        pass
-    return None
+    return "cpu"
 
 
 class DenseEmbedder(Protocol):

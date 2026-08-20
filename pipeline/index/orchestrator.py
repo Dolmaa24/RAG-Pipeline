@@ -79,9 +79,9 @@ def index_text(
     from pipeline.chunk.chunker import DocumentChunker
     from pipeline.embed.orchestrator import DocumentEmbedder
     from pipeline.preprocess.orchestrator import DocumentPreprocessor
-    from pipeline.store.chroma import ChromaStore
+    from pipeline.store.lance import LanceStore
 
-    report = IndexReport(source=source, collection=config.CHROMA_COLLECTION_NAME)
+    report = IndexReport(source=source, collection=config.LANCE_TABLE_NAME)
     started = time.perf_counter()
 
     if not text or not text.strip():
@@ -141,10 +141,10 @@ def index_text(
 
     # --- store ---------------------------------------------------------- #
     stage = time.perf_counter()
-    store = store or ChromaStore()
+    store = store or LanceStore()
     report.stored = store.upsert_document(chunked)
     report.timings_ms["store"] = round((time.perf_counter() - stage) * 1000, 2)
-    report.collection = store.collection_name
+    report.collection = getattr(store, "table_name", "")
 
     report.timings_ms["total"] = round((time.perf_counter() - started) * 1000, 2)
     metrics.incr("index.documents")

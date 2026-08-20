@@ -150,9 +150,18 @@ class OllamaBackend:
             # to it. Older builds only understand the string "json" and ignore
             # an object, which is why the shape is still validated afterwards.
             "format": _format_for(json_schema),
+            # Ollama unloads the model 5 minutes after the last call by default,
+            # and reloading it was measured at ~2.2s against ~170ms warm. A
+            # pipeline that calls intermittently pays that on almost every call.
+            "keep_alive": config.OLLAMA_KEEP_ALIVE,
             "options": {
                 "temperature": 0.0,  # extraction is not a creative task
-                "num_predict": 4096,
+                "num_predict": config.OLLAMA_NUM_PREDICT,
+                # Prompt and generation share this window. A full chunk measured
+                # 2919 prompt tokens, so the 4096 default leaves under 1200 for
+                # output before Ollama starts shifting the context — silently
+                # discarding the front of the prompt, which is the instructions.
+                "num_ctx": config.OLLAMA_NUM_CTX,
             },
         }
         try:

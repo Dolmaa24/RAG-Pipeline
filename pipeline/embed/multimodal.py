@@ -3,7 +3,7 @@
 Not part of the ingest path. It is here for image-and-text retrieval, and the
 thing to know before wiring it in is that CLIP is 512-dimensional while the
 default dense model is 384 — so it needs a collection of its own. Writing both
-into one collection is refused by :class:`~pipeline.store.chroma.ChromaStore`.
+into one table is refused by :class:`~pipeline.store.lance.LanceStore`.
 """
 
 from __future__ import annotations

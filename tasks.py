@@ -105,7 +105,13 @@ def _fan_out(item: ExtractionItem, prompt: str, schema: dict, limit: int, **opti
     return queued
 
 
-def _enqueue_index(item: ExtractionItem, *, enabled: Optional[bool]) -> Optional[str]:
+def _enqueue_index(
+    item: ExtractionItem,
+    *,
+    enabled: Optional[bool],
+    graph: Optional[bool] = None,
+    supplied_metadata: Optional[dict] = None,
+) -> Optional[str]:
     """Hand the finished text to the cpu queue for chunking and embedding.
 
     Indexing is a task rather than a stage for two reasons. Embedding is a
@@ -128,16 +134,23 @@ def _enqueue_index(item: ExtractionItem, *, enabled: Optional[bool]) -> Optional
     if not text.strip():
         return None
 
+    from pipeline.index.metadata import derive
+
+    metadata = {
+        "content_hash": item.content_hash or "",
+        "extraction_tier": item.tier if item.tier is not None else -1,
+        "job_id": item.job_id or "",
+    }
+    # doc_type, author and date come from what the pipeline already detected and
+    # harvested; department, region and permission_level from the caller.
+    metadata.update(derive(item, supplied=supplied_metadata))
+
     try:
         task = index_document.delay(
             text[: config.INDEX_MAX_TEXT_CHARS],
             source=item.canonical_url or item.url,
-            metadata={
-                "content_hash": item.content_hash or "",
-                "kind": item.kind.value,
-                "extraction_tier": item.tier if item.tier is not None else -1,
-                "job_id": item.job_id or "",
-            },
+            metadata=metadata,
+            build_graph=graph,
         )
     except Exception as exc:
         log.warning("task.index_enqueue_failed", url=item.url, error=repr(exc))
@@ -165,6 +178,8 @@ def extract_url(
     follow_children: bool = True,
     fan_out: int = 0,
     index: Optional[bool] = None,
+    build_graph: Optional[bool] = None,
+    metadata: Optional[dict] = None,
 ) -> dict:
     """Extract structured data from any URL: page, document, feed, archive, media.
 
@@ -175,6 +190,11 @@ def extract_url(
     ``index`` overrides ``INDEX_ENABLED`` for this job: the extracted text is
     chunked, embedded and written to the vector store by a separate cpu-queue
     task. ``None`` means follow the configured default.
+
+    ``metadata`` carries the filter fields nothing can infer — department,
+    region, permission_level — onto every chunk this document produces.
+    ``build_graph`` additionally extracts entities and relationships, which is
+    one model call per chunk and therefore never implicit.
     """
     with job_context(self.request.id, url):
         try:
@@ -199,7 +219,9 @@ def extract_url(
 
             result = _result(report, item)
 
-            index_task_id = _enqueue_index(item, enabled=index)
+            index_task_id = _enqueue_index(
+                item, enabled=index, graph=build_graph, supplied_metadata=metadata
+            )
             if index_task_id:
                 item.metadata["index_task_id"] = index_task_id
                 result["index_task_id"] = index_task_id
@@ -557,6 +579,7 @@ def index_document(
     metadata: Optional[dict] = None,
     strategy: Optional[str] = None,
     local_only: bool = False,
+    build_graph: Optional[bool] = None,
 ) -> dict:
     """Chunk, embed and store one document's text.
 
@@ -575,12 +598,84 @@ def index_document(
                 strategy=strategy,
                 local_only=local_only,
             )
-            return report.to_dict()
+            payload = report.to_dict()
+
+            if config.GRAPH_ENABLED if build_graph is None else build_graph:
+                payload["graph"] = _build_graph(text, source, metadata, local_only)
+            return payload
         except SoftTimeLimitExceeded:
             log.error("task.soft_timeout", url=source, task="index_document")
             raise
         finally:
             gc.collect()
+
+
+@celery_app.task(bind=True, name="tasks.search")
+def search(
+    self,
+    query: str,
+    *,
+    filters: Optional[dict] = None,
+    limit: Optional[int] = None,
+    fusion: Optional[str] = None,
+    alpha: Optional[float] = None,
+    use_graph: Optional[bool] = None,
+    rerank: Optional[bool] = None,
+    rewrite: Optional[bool] = None,
+    local_only: bool = False,
+) -> dict:
+    """Retrieve evidence for a question.
+
+    On the cpu queue: it embeds the query and may load a reranker, and it must
+    not do either inside the io pool.
+    """
+    with job_context(self.request.id, query[:80]):
+        try:
+            from pipeline.retrieve import MetadataFilter, retrieve
+
+            result = retrieve(
+                query,
+                filters=MetadataFilter(**filters) if filters else None,
+                limit=limit,
+                fusion=fusion,
+                alpha=alpha,
+                use_graph=use_graph,
+                rerank_results=rerank,
+                rewrite=rewrite,
+                local_only=local_only,
+            )
+            return result.to_dict()
+        except SoftTimeLimitExceeded:
+            log.error("task.soft_timeout", query=query[:80], task="search")
+            raise
+        finally:
+            gc.collect()
+
+
+def _build_graph(
+    text: str, source: str, metadata: Optional[dict], local_only: bool
+) -> dict:
+    """Fold this document into the knowledge graph.
+
+    Runs inside the indexing task rather than as one of its own, because it
+    needs the same text and the same worker already has the embedder resident.
+    A failure here is reported, not raised: the chunks are already stored and
+    are useful without a graph.
+    """
+    try:
+        from pipeline.graph.builder import build_graph
+
+        report = build_graph(
+            text,
+            source_url=source,
+            content_hash=str((metadata or {}).get("content_hash", "")),
+            local_only=local_only,
+            database=db,
+        )
+        return report.to_dict()
+    except Exception as exc:
+        log.warning("task.graph_failed", source=source[:80], error=repr(exc))
+        return {"error": repr(exc)}
 
 
 # --------------------------------------------------------------------------- #
@@ -639,6 +734,7 @@ __all__ = [
     "extract_media",
     "extract_url",
     "index_document",
+    "search",
     "process_media_scrape_task",
     "process_web_scrape_task",
 ]

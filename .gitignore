@@ -41,5 +41,7 @@ huggingface/
 .idea/
 *.swp
 
-# Vector store
+# Vector store and knowledge graph
+lance_data/
+kuzu_db/
 chroma_data/

@@ -237,7 +237,7 @@ idempotency comes from the database rather than from application logic.
 ## Indexing for retrieval
 
 Off by default. Turn it on and a document that finishes extraction is also
-cleaned, split, embedded and written to a local Chroma collection:
+cleaned, split, embedded and written to a local LanceDB table:
 
 ```bash
 curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -d '{
@@ -280,30 +280,234 @@ path, language, which extraction tier produced the text, and which model
 embedded it.
 
 ```bash
-PYTHONPATH=. ./venv/bin/python -c "from pipeline.store.chroma import ChromaStore; print(ChromaStore().count())"
+curl -s localhost:8000/api/v1/index/stats | python3 -m json.tool
 ```
 
-**One collection holds one embedding space.** Cosine distance between a 384-d
-BGE vector and a 512-d CLIP vector is not a bigger or smaller number, it is a
-category error, and Chroma will not stop you — so the collection records which
+**One table holds one embedding space.** Cosine distance between a 384-d BGE
+vector and a 512-d CLIP vector is not a bigger or smaller number, it is a
+category error, and no vector store will stop you — so the table records which
 model wrote it and a mismatched write is refused. Use a separate
-`CHROMA_COLLECTION_NAME` per model.
+`LANCE_TABLE_NAME` per model.
 
 **Two macOS traps, on top of the ones below.** `MTLCompilerService` does not
 survive `fork()`: a prefork worker child that builds a Metal pipeline dies with
-`SIGABRT`, and `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` does not cover it — so
-inside a fork pool the embedding model is pinned to the CPU, where BGE-small
-embeds 32 chunks in about a quarter of a second anyway. And the model is *not*
-preloaded at process init: it takes about six seconds to construct and billiard
-kills a child that has not reported ready in four, so preloading it turns worker
-startup into an endless loop of half-loaded children. It loads on the first
-indexing task instead and stays resident — the first document costs ~11s, the
-next ~0.3s.
+`SIGABRT`, and `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` does not cover it. The
+uvicorn process dies the same way on its first embedding call, with no traceback
+because it is killed by a signal. So `INDEX_EMBED_DEVICE` defaults to the CPU,
+where BGE-small embeds 32 chunks in about a quarter of a second and leaves the
+GPU to Whisper, which needs it. And the model is *not* preloaded at process
+init: it takes about six seconds to construct and billiard kills a child that
+has not reported ready in four, so preloading turns worker startup into an
+endless loop of half-loaded children. It loads on the first indexing task
+instead and stays resident — the first document costs ~11s, the next ~0.3s.
 
-What is not here yet: retrieval. Sparse term counts are written alongside every
-chunk and nothing reads them back, because ranking with them needs a
-corpus-level IDF pass that has not been built. `ChromaStore.search` is dense
-only, and there is no search endpoint.
+---
+
+## Retrieval
+
+Hybrid over the same rows, plus a knowledge graph:
+
+```bash
+curl -X POST localhost:8000/api/v1/search -H 'Content-Type: application/json' -d '{
+  "query": "What was Doug Field's trajectory before joining Ford?",
+  "filters": {"department": ["research"], "date_from": "2026-01-01"},
+  "limit": 10, "use_graph": true
+}'
+```
+
+Chunks and triples come back with their provenance. **Nothing here writes an
+answer** — retrieval returns evidence and the orchestrator above it decides what
+to do with that. Keeping synthesis out means this layer can be judged on whether
+it found the right evidence, which has a correct answer, rather than on whether
+the prose reads well, which does not.
+
+### One model call, three rewriting techniques
+
+Self-query, sub-query decomposition and step-back prompting are usually three
+calls. They are three questions about the same sentence, so they are three
+fields of one structured answer:
+
+| Technique | What it contributes |
+|---|---|
+| **Self-query** | Turns "Q3 finance reports by Chen" into a filter. Without it the metadata columns are decoration — something has to decide "finance" is a department and not a search term. |
+| **Decomposition** | "How did revenue and headcount change after the merger" retrieves badly as one query and well as two. |
+| **Step-back** | The general form of the question, for when the specific wording matches nothing. |
+
+And for most questions the call is skipped entirely: short, single-clause, no
+comparison and no date expression means retrieve directly. Plans are cached by
+normalised query. Rewriting a question that did not need it is the most
+avoidable latency in the whole path.
+
+### Two legs, then fusion
+
+Dense and BM25 fail in opposite directions, which is the reason to run both.
+Dense finds "how do I get my money back" in a document that says *refunds* and
+never says *money*; it also returns something vaguely topical when the answer is
+absent. BM25 finds the part number, the surname, the error code — where being
+approximately right is being wrong — and finds nothing when the wording differs.
+
+Fusion is ours rather than the store's because there are two dimensions to fuse
+across: the two legs, and the several sub-queries a decomposed question
+produced.
+
+- **`rrf`** (default) combines by rank alone, so it is unaffected by cosine
+  similarity and BM25 relevance being unrelated scales — the thing that makes a
+  weighted sum of raw scores misbehave.
+- **`alpha`** weights normalised scores: `alpha` on dense, `1 - alpha` on BM25.
+  Worth tuning once you have judgements to tune against.
+
+Both legs and the graph run concurrently. Every sub-query embeds in one batched
+`encode()`, not one call each.
+
+### Filters run before the search, not after
+
+```json
+{"department": ["finance"], "author": ["Chen"], "date_from": "2026-01-01"}
+```
+
+`doc_type`, `department`, `date`, `author`, `region`, `permission_level`,
+`language` and `source`, each with a B-tree scalar index so `prefilter=True` is a
+lookup rather than a scan. Post-filtering would ask for ten results and then
+throw some away, so a selective filter returns fewer than ten — or none.
+
+**Where the values come from is not uniform, and pretending otherwise would be
+the bug.** `language` and `doc_type` are already known; `author` and `date` are
+harvested from JSON-LD, OpenGraph and PDF metadata the cascade already reads;
+`department`, `region` and `permission_level` are supplied by whoever ingested
+the document:
+
+```bash
+curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -d '{
+  "url": "https://internal.example/report", "prompt": "...", "schema_template": {...},
+  "index": true, "metadata": {"department": "finance", "permission_level": "internal"}
+}'
+```
+
+Nothing infers a permission level. A security control derived from a guess is
+worse than no control, because it looks like one. An unset field does not match
+a filter on it — the safe direction for permissions, and the surprising one for
+department, where a crawled page simply has none.
+
+### Quantisation, and when not to use it
+
+`IVF_PQ` with 48 sub-vectors compresses a 384-float32 vector from 1536 bytes to
+48. `RETRIEVE_NPROBES` sets how many partitions are searched and
+`RETRIEVE_REFINE_FACTOR` rescores the shortlist exactly, which recovers most of
+what quantisation costs in accuracy.
+
+**The index is not built below `INDEX_ANN_MIN_ROWS` (5000).** IVF_PQ trains on
+the data — it clusters to build partitions and learns a codebook — so on a small
+table it is slower than a flat scan *and* less accurate than one. Under the
+threshold every search is exact brute-force KNN, which on a few thousand vectors
+is a millisecond.
+
+### The knowledge graph
+
+Ported from [Dolmaa24/GraphRAG](https://github.com/Dolmaa24/GraphRAG):
+LLM extraction → entity resolution → Kuzu → vector-seeded traversal.
+
+It answers what flat retrieval structurally cannot. "What was Doug Field's
+trajectory before Ford" needs three facts from three documents joined through a
+shared entity; no single chunk contains the answer, so no amount of chunk ranking
+finds it. The graph has the join:
+
+```
+(Doug Field)-[WORKED_AT (2013)]->(Tesla)
+(Doug Field)-[LED (2018)]->(Project Titan)
+(Doug Field)-[DEPARTED (2021)]->(Apple)
+(Doug Field)-[JOINED (2021)]->(Ford Motor Company)
+(Elon Musk)-[SUPERVISED]->(Doug Field)
+```
+
+### Entities are not generated, they are scored
+
+Naming the entities in a passage is a classification problem. Asking a decoder
+to answer it by emitting JSON token by token is the slowest available way to get
+a label, and it was why graph extraction dominated ingest cost.
+
+[GLiNER](https://github.com/urchade/GLiNER) scores spans instead — an encoder
+under 500M parameters, on the CPU. Measured on the same paragraph:
+
+| | LLM entities | GLiNER entities |
+|---|---|---|
+| Entity extraction | ~10 s | **166 ms** |
+| Whole extraction, per document | 6.8 s | **3.7 s** |
+| Entities found (benchmark) | 10/11 | **11/11** |
+
+The model is still asked for relationships, which GLiNER does not do — and that
+call shrinks too, because given the entity list it only has to emit edges.
+Descriptions come from the text rather than a model: GLiNER returns offsets, so
+the sentence around the first mention is free to take, is a real quote, and
+cannot hallucinate.
+
+Set `GRAPH_ENTITY_BACKEND=llm` for the original path. If the package is missing,
+it falls back there on its own rather than failing the job.
+
+### Directions are checked, not hoped for
+
+`Northwind ACQUIRED Fabrikam` and its reverse are a fact and a falsehood, and
+nothing downstream can tell them apart — the graph *is* the source of truth for
+relationships. `llama3.2:3b` reversed two of four directional edges on the
+benchmark. Two signals now catch that:
+
+- **Type asymmetry.** `FOUNDED` runs from a person or organisation *to* an
+  organisation or project, so `(Project Titan)-[STARTED]->(Apple)` is
+  structurally impossible and the flip is structurally fine.
+- **Word order.** Types cannot help when both ends are the same kind — two
+  organisations either way round. But the sentence says "Northwind Traders
+  acquired Fabrikam Ltd", and an active subject precedes its verb. Passive voice
+  inverts that, so "was acquired by" is detected before deciding.
+
+The rule throughout is to **act only when one orientation fits and the other does
+not**. Ambiguous edges are left exactly as the model wrote them, because
+flipping on a guess would replace one wrong-fact generator with another.
+
+Measured on `llama3.2:3b`, the model that got these wrong:
+
+```
+without validation   edges ok 2   reversed 2
+with validation      edges ok 4   reversed 0
+```
+
+Six things changed in the port:
+
+- **Every query is parameterised.** The original built Cypher by string
+  interpolation with hand-escaped quotes, on entity names a model invented from
+  scraped pages. `O'Brien & Co` broke it; something crafted did worse.
+- **Generated Cypher runs on a read-only database**, not merely a prompt asking
+  the model to only read. The keyword check is the first guard; a database that
+  cannot write is the one that holds when the check is wrong.
+- **Edges `MERGE` instead of `CREATE`**, so re-ingesting a document updates the
+  graph rather than doubling it.
+- **The candidate pool is embedded once**, not re-encoded for every new entity —
+  the original was O(N²) model calls in the size of the graph.
+- **Entity resolution strips corporate suffixes first.** `Apple Inc.` ≡ `Apple`
+  is the most common alias there is, and llama3.2:3b asked directly gets it
+  wrong. Deterministic first, similarity second, model only for what is left.
+- **Every node and edge carries provenance** — source URL and content hash. A
+  triple you cannot trace is one you cannot check or expire.
+
+Graph building is one model call per chunk, so it is opt-in per job
+(`"build_graph": true`), never implicit — and **cached on the chunk's content
+hash**, because it is both the most expensive call here and a perfectly
+deterministic one. Measured on the same document:
+
+```
+first build    23.7s      extraction 9.8s
+re-ingest       0.14s     extraction 0.001s
+```
+
+The key covers the content, the prompt and the model name. A different model
+does not extract the same graph from the same paragraph, and serving one where
+the other was asked for would be a quality regression that looks like a cache
+hit. The cache is process-wide and backed by Mongo when one is configured, so it
+also survives `worker_max_tasks_per_child` recycling the worker.
+
+**Kuzu is single-writer and the lock is process-wide.** Measured: many read-only
+processes coexist, but one read-write handle blocks every other open, including
+read-only ones. So retrieval opens read-only and ingest opens, writes and
+closes — a worker holding the write lock would make search fail for as long as
+it was alive.
 
 ---
 
@@ -471,6 +675,54 @@ Every field is marked required, unioned with `null`. A field that is genuinely
 absent must have a way to say so — without one, a model is pushed into inventing
 a plausible value, which is worse than an empty cell.
 
+## Choosing a model
+
+The extraction model is scored on the jobs this pipeline gives it, not on a
+leaderboard — `bench/graph_models.py` runs three documents with known answers,
+four alias pairs, and five traversal prompts checked against Kuzu's own parser:
+
+```bash
+PYTHONPATH=. ./venv/bin/python -m bench.graph_models llama3.2:3b qwen2.5:3b
+```
+
+"Extra edges" counts relationships beyond the ones each case asks about. Not all
+are wrong — the text states more than the two or three facts written down — but
+fabrication shows up there and nowhere else, which is why the column exists: an
+earlier version scored a model perfectly while it was inventing edges.
+
+With everything on — GLiNER entities and direction validation:
+
+| | `llama3.2:3b` | `qwen2.5:3b` |
+|---|---|---|
+| Entities found | 11/11 | 11/11 |
+| Edge directions right | 4 | 3 |
+| Edge directions reversed | 0 | 0 |
+| Edges missing | 0 | 1 |
+| Extra edges | 3 | 3 |
+| Alias judgement | 3/4 | **4/4** |
+| Cypher Kuzu accepts | 1/5 | **2/5** |
+| Time | 32.8s | **22.4s** |
+
+Raw, with neither check, the gap was starker: llama reversed **two of four**
+directional edges and missed the `IBM` / `International Business Machines`
+identity, while qwen reversed none.
+
+`qwen2.5:3b` is the default, but note what changed. Direction validation now
+fixes reversals for *either* model, so the original argument for qwen — that it
+does not reverse edges — no longer decides it. What remains is alias judgement
+(4/4 against 3/4), which still matters because a split entity breaks exactly the
+multi-hop join the graph exists to make, and it compounds as the corpus grows.
+
+Two cautions the benchmark itself taught:
+
+- **Check Cypher against the database, not a regex.** An earlier version of this
+  benchmark used only the static guards and scored `qwen2.5:3b` 2/2 on queries
+  Kuzu then rejected outright (`[r:r:CONNECTS_TO]`, `{{name: ...}}`).
+- **Do not tune the prompt by eye.** Adding "project" to the entity-type list
+  recovered a missed entity on the document being looked at — and reversed an
+  edge elsewhere. Scored across the whole benchmark it was a net loss, so it was
+  not shipped.
+
 ## Choosing a backend
 
 | | Ollama (local) | Groq (hosted) |
@@ -486,15 +738,62 @@ support is per-model (`openai/gpt-oss-*`, `qwen`); asking an unsupported model
 for a schema returns a 400, which the backend recovers from by dropping to JSON
 mode and validating here instead.
 
+### Interactive and bulk want different backends
+
+That table says "always use the hosted one" until you look at volume. Calls here
+come in two shapes:
+
+| | Interactive | Bulk |
+|---|---|---|
+| Examples | query understanding, graph traversal | extraction, chunking, graph building |
+| Tokens per call | ~400 | ~3,100 |
+| Volume | a few a minute | one per chunk |
+| Someone waiting | yes | no |
+
+A local 3B was measured here at **~35 tok/s** generating and ~280 tok/s
+prefilling; hosted inference runs several hundred to a thousand. For an
+interactive call that is ~0.3s against ~8s, and the user feels every bit of it.
+
+For bulk it inverts. A free tier's tokens-per-minute cap — 8–12K depending on
+model — divided by ~3.1K tokens per chunk is **roughly two to four chunks a
+minute**. Local has no such ceiling, so it is *faster* for ingest despite being
+slower per call.
+
+So `LLM_INTERACTIVE_BACKEND` can point somewhere different from `LLM_BACKEND`:
+
+```bash
+LLM_BACKEND=ollama              # ingest: unlimited, local, slow per call
+LLM_INTERACTIVE_BACKEND=groq    # queries: fast, rate-limited, low volume
+```
+
+An interactive preference that is unavailable falls back to the bulk backend
+rather than failing — a missing Groq key should make search slower, not broken.
+An *explicitly named* backend still fails loudly, because naming one is a
+decision about where content may go rather than a preference about speed.
+
+### Ollama settings that matter
+
+Two defaults cost real time and one costs correctness:
+
+- **`OLLAMA_KEEP_ALIVE=30m`.** Ollama unloads the model five minutes after the
+  last call. Reloading measured ~2.2s against ~170ms warm, so an intermittent
+  pipeline pays it on nearly every call.
+- **`OLLAMA_NUM_CTX=8192`.** Prompt and generation share the window and the
+  default is 4096. A full `MAX_CHUNK_SIZE` chunk measured 2,919 prompt tokens,
+  so a long answer overflows — and Ollama responds by *shifting* the context,
+  discarding the front of the prompt where the instructions are. The symptom is
+  bad extraction, not an error. The cost is KV cache: `llama3.2:3b` measured
+  2.0 GB resident at 4096 and 3.0 GB at 8192.
+
 ## Tests
 
 ```bash
 PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 ```
 
-58 tests, all offline — no network, no Ollama, no model download. The dense
-embedder is faked where a test only needs *a* vector; the one test that loads
-BGE for real is marked `slow`:
+241 tests, all offline — no network, no Ollama, no model download. The dense
+embedder and the LLM backends are faked where a test only needs *a* vector or
+*an* answer; the one test that loads BGE for real is marked `slow`:
 
 ```bash
 PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q -m "not slow"
@@ -502,8 +801,14 @@ PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q -m "not slow"
 
 They cover the cleaning steps, the chunk router's four branches, the
 model-assisted splitter and each of its fallbacks, the dense embedder's
-one-load-per-process guarantee, fork-safe device selection, and the store's
-embedding-space guard.
+one-load-per-process guarantee, the store's embedding-space guard and ANN
+threshold, filter compilation including injection attempts, the query planner's
+gate and cache, both fusion strategies, backend routing (an interactive
+preference falls back when unavailable; a named backend does not), the
+extraction cache (a changed prompt or model invalidates it; an empty extraction
+is never stored), and — for the graph — Cypher injection, re-ingest idempotency,
+multi-hop path expansion, suffix resolution, the read-only guard and the
+write-lock lifecycle.
 
 ## Layout
 
@@ -522,11 +827,13 @@ pipeline/
   trust/        validation, dedupe, drift
   preprocess/   cleaning, encoding repair, language, optional PII masking
   chunk/        the strategy router and the four splitters
-  embed/        dense (local/hosted), sparse, multimodal
-  store/        the Chroma collection
+  embed/        dense (local/hosted), multimodal
+  store/        the LanceDB table: vectors, BM25, filter columns
   index/        preprocess -> chunk -> embed -> store, as one call
+  retrieve/     query understanding, hybrid search, fusion, reranking
+  graph/        GLiNER entities, relations, direction checks, Kuzu, cache
   runner.py     the pipeline itself
-tests/          58 offline tests; one marked `slow` loads the real model
+tests/          241 offline tests; one marked `slow` loads the real model
 ```
 
 ## Notes and limitations
@@ -546,9 +853,34 @@ tests/          58 offline tests; one marked `slow` loads the real model
 - Tier 1's field mapping uses a synonym table (`FIELD_SYNONYMS`). A schema using
   unusual field names may fall through to a later tier; adding a synonym is a
   one-line change.
-- Indexing writes sparse term counts that nothing reads. Ranking with them
-  needs corpus-level IDF, so retrieval today is dense-only and there is no
-  search endpoint — see "Indexing for retrieval".
+- **Graph building is one model call per chunk**, and on Groq's free tier
+  (8000 TPM) that is the binding constraint on ingest — not CPU. A large
+  document will rate-limit long before it finishes.
+- **The Cypher agent is off by default.** Neither local model writes Cypher
+  Kuzu reliably accepts — `qwen2.5:3b` 2/5, `llama3.2:3b` 1/5 — so the fixed
+  template answers anyway: 39ms against the agent's 1.9s for identical triples.
+  Turn it on with a strong hosted model.
+- **Entity resolution at 0.70 cosine can still merge distinct entities** with
+  similar names. Suffix stripping and the model check reduce this; neither
+  removes it.
+- **A 3B extraction model still gets things wrong.** Direction validation
+  catches reversals and GLiNER catches missed entities, but both models still
+  occasionally invent a relationship between two entities the text never
+  connects, and neither check can see that. `bench/graph_models.py` is there to
+  re-measure when you change the model; do not change the extraction prompt
+  without running it, because a one-word change that recovered an entity also
+  reversed an edge.
+- **Direction validation only covers the verbs it knows.** A relation outside
+  `RULES` in `pipeline/graph/validate.py`, or one between two same-typed
+  entities with no usable word order, is left as the model wrote it. It reduces
+  the failure rate; it does not eliminate it.
+- **`department`, `region` and `permission_level` are empty for everything
+  crawled so far.** Filtered retrieval on them returns nothing until content is
+  re-ingested with them supplied.
+- **The reranker is the memory straw** on 8 GB, on top of BGE-small, Kuzu,
+  LanceDB and a local LLM. Off by default.
+- Retrieval is per-question; there is no multi-agent orchestration or answer
+  synthesis yet. This layer returns evidence.
 - `langchain-experimental` is sunset upstream. It is used for one thing,
   `SemanticChunker`; replacing it means embedding sentences and cutting at a
   percentile breakpoint, which is perhaps forty lines against the dense embedder

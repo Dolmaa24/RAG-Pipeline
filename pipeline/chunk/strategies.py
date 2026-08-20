@@ -23,22 +23,41 @@ log = get_logger("chunk")
 
 
 #: Document metadata that has a named home on ChunkMetadata. Everything else the
-#: caller supplied — content hash, resource kind, which tier extracted it — is
-#: carried through in ``extra`` rather than dropped, because that is the
-#: provenance that makes a retrieval hit traceable back to a stored record.
-_NAMED_METADATA = frozenset({"source", "page_no", "section_name"})
+#: caller supplied — content hash, which tier extracted it — is carried through
+#: in ``extra`` rather than dropped, because that is the provenance that makes a
+#: retrieval hit traceable back to a stored record.
+_NAMED_METADATA = frozenset(
+    {
+        "source",
+        "page_no",
+        "section_name",
+        "doc_type",
+        "department",
+        "date",
+        "author",
+        "region",
+        "permission_level",
+    }
+)
 
 
 def _metadata(doc: PreprocessedDocument, strategy: str, *, section: str = "") -> ChunkMetadata:
+    meta = doc.metadata
     return ChunkMetadata(
-        source=doc.metadata.get("source", ""),
-        page_no=doc.metadata.get("page_no", -1),
-        section_name=section or doc.metadata.get("section_name", ""),
+        source=meta.get("source", ""),
+        page_no=meta.get("page_no", -1),
+        section_name=section or meta.get("section_name", ""),
         language=doc.language,
         chunk_strategy=strategy,
+        doc_type=str(meta.get("doc_type", "") or ""),
+        department=str(meta.get("department", "") or ""),
+        date=str(meta.get("date", "") or ""),
+        author=str(meta.get("author", "") or ""),
+        region=str(meta.get("region", "") or ""),
+        permission_level=str(meta.get("permission_level", "") or ""),
         extra={
             key: value
-            for key, value in doc.metadata.items()
+            for key, value in meta.items()
             if key not in _NAMED_METADATA
         },
     )

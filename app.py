@@ -97,6 +97,22 @@ class ExtractionRequest(BaseModel):
             "separate task on the cpu queue. null follows INDEX_ENABLED."
         ),
     )
+    build_graph: Optional[bool] = Field(
+        None,
+        description=(
+            "Also extract entities and relationships into the knowledge graph. "
+            "One model call per chunk, so never implicit. null follows GRAPH_ENABLED."
+        ),
+    )
+    metadata: Optional[dict] = Field(
+        None,
+        description=(
+            "Filter fields nothing can infer, applied to every chunk: department, "
+            "region, permission_level. doc_type, author, date and language are "
+            "derived from the document itself."
+        ),
+    )
+
 
     @field_validator("url")
     @classmethod
@@ -110,6 +126,45 @@ class ExtractionRequest(BaseModel):
     def _non_empty_schema(cls, value: dict) -> dict:
         if not value:
             raise ValueError("schema_template must name at least one field")
+        return value
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="A question, in plain language.")
+    limit: int = Field(10, ge=1, le=100)
+    filters: Optional[dict] = Field(
+        None,
+        description=(
+            "Pre-filter before retrieval. Keys: doc_type, department, author, "
+            "region, permission_level, language, source (lists), date_from and "
+            "date_to (YYYY-MM-DD). A document with the field unset does not match."
+        ),
+    )
+    fusion: Optional[str] = Field(
+        None, description="'rrf' (rank-based, robust) or 'alpha' (weighted scores)."
+    )
+    alpha: Optional[float] = Field(
+        None, ge=0.0, le=1.0,
+        description="Under 'alpha' fusion: weight on the dense leg. 1.0 pure vector, 0.0 pure BM25.",
+    )
+    use_graph: Optional[bool] = Field(None, description="Include the knowledge-graph leg.")
+    rerank: Optional[bool] = Field(
+        None, description="Cross-encoder rerank the shortlist. Slower and more accurate."
+    )
+    rewrite: Optional[bool] = Field(
+        None,
+        description=(
+            "Force or skip query rewriting. null lets the heuristic decide, which "
+            "skips the model call for simple questions."
+        ),
+    )
+    local_only: bool = Field(False, description="Never send the query to a hosted model.")
+
+    @field_validator("fusion")
+    @classmethod
+    def _known_fusion(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in ("rrf", "alpha"):
+            raise ValueError("fusion must be 'rrf' or 'alpha'")
         return value
 
 
@@ -331,6 +386,8 @@ def extract(request: ExtractionRequest) -> dict:
                 follow_children=request.follow_children,
                 fan_out=request.fan_out,
                 index=request.index,
+                build_graph=request.build_graph,
+                metadata=request.metadata,
                 **kwargs,
             )
     except Exception as exc:
@@ -465,6 +522,91 @@ def stop_crawl(crawl_id: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Task status
 # --------------------------------------------------------------------------- #
+
+
+@app.post("/api/v1/search", tags=["retrieve"])
+def search(request: SearchRequest) -> dict:
+    """Retrieve evidence for a question.
+
+    Synchronous, because a caller asking a question is waiting for the answer —
+    unlike extraction, where the work outlives the request. It runs in the API
+    process, so the API loads the embedding model on first use.
+
+    Returns chunks and graph triples with their provenance, not prose. What
+    reasons over them is the caller's business.
+    """
+    try:
+        from pipeline.retrieve import MetadataFilter, retrieve
+    except Exception as exc:
+        raise HTTPException(503, f"retrieval is unavailable: {exc}") from exc
+
+    try:
+        filters = MetadataFilter(**request.filters) if request.filters else None
+    except Exception as exc:
+        raise HTTPException(400, f"bad filters: {exc}") from exc
+
+    try:
+        result = retrieve(
+            request.query,
+            filters=filters,
+            limit=request.limit,
+            fusion=request.fusion,
+            alpha=request.alpha,
+            use_graph=request.use_graph,
+            rerank_results=request.rerank,
+            rewrite=request.rewrite,
+            local_only=request.local_only,
+        )
+    except Exception as exc:
+        log.exception("api.search_failed", query=request.query[:80], error=repr(exc))
+        raise HTTPException(500, f"retrieval failed: {exc}") from exc
+
+    log.info(
+        "api.search",
+        query=request.query[:80],
+        chunks=len(result.chunks),
+        triples=len(result.triples),
+        ms=result.timings_ms.get("total"),
+    )
+    return result.to_dict()
+
+
+@app.get("/api/v1/index/stats", tags=["retrieve"])
+def index_stats() -> dict:
+    """What is in the vector store, and which filter values it holds."""
+    from pipeline.store.schema import FILTER_FIELDS
+
+    try:
+        from pipeline.store.lance import LanceStore
+
+        store = LanceStore()
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+    return {
+        "available": store.table is not None,
+        "table": store.table_name,
+        "chunks": store.count(),
+        "ann_index_threshold": config.INDEX_ANN_MIN_ROWS,
+        "filters": {field: store.distinct(field, limit=25) for field in FILTER_FIELDS},
+    }
+
+
+@app.get("/api/v1/graph/entities", tags=["retrieve"])
+def graph_entities(limit: int = Query(100, ge=1, le=1000)) -> dict:
+    """What the knowledge graph knows, for inspection."""
+    try:
+        from pipeline.graph.store import GraphStore
+
+        # Read-only: the API must not hold a lock that blocks ingest.
+        with GraphStore(read_only=True) as store:
+            return {
+                "available": True,
+                "counts": store.count(),
+                "entities": store.entities(limit),
+            }
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
 
 
 @app.get("/api/v1/tasks/{task_id}", tags=["extract"])
