@@ -305,6 +305,27 @@ class LanceStore:
             return 0
         return table.count_rows(filter=where) if where else table.count_rows()
 
+    def get(self, chunk_id: str) -> Optional[dict]:
+        """One row by id, or None.
+
+        The id is quoted through the same escaper the filter compiler uses.
+        Chunk ids reaching this method come from a model repeating one back, so
+        they are caller input by the time they arrive.
+        """
+        table = self.table
+        if table is None or not chunk_id.strip():
+            return None
+
+        from pipeline.retrieve.filters import quote_literal
+
+        rows = (
+            table.search()
+            .where(f"{ID_FIELD} = {quote_literal(chunk_id)}")
+            .limit(1)
+            .to_list()
+        )
+        return rows[0] if rows else None
+
     def distinct(self, column: str, limit: int = 200) -> list[str]:
         """The values a filter column actually holds. For building a UI."""
         table = self.table

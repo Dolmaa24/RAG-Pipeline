@@ -260,6 +260,47 @@ class GraphStore:
             return []
         return _dedupe([t for row in rows for t in _triples_from_row(row)])
 
+    def path(
+        self, start: str, end: str, *, max_hops: int = 3, limit: int = 25
+    ) -> list[Triple]:
+        """Every edge on the paths joining two entities, up to ``max_hops``.
+
+        Run once in each direction rather than as one undirected match. An
+        undirected traversal reaches the same pairs, but the order it walks an
+        edge in is not the direction that edge points, so reconstructing hops
+        from the walk emits reversed facts — "Beta Industries acquired Acme
+        Corporation" for a graph that says the opposite. A wrong edge is worse
+        than a missing one, so the cost is paid: a path that changes direction
+        halfway is not found.
+        """
+        if not start.strip() or not end.strip():
+            return []
+
+        depth = max(1, min(int(max_hops), config.GRAPH_MAX_HOPS + 1))
+        # Not $start/$end: END is a Cypher keyword, and Kuzu's parser rejects it
+        # as a parameter name, pointing at the whole clause rather than the word.
+        query = f"""
+            MATCH p = (a:Entity)-[:CONNECTS_TO*1..{depth}]->(b:Entity)
+            WHERE a.name = $from_name AND b.name = $to_name
+            RETURN p
+            LIMIT $limit
+        """
+
+        triples: list[Triple] = []
+        for source, target in ((start, end), (end, start)):
+            try:
+                rows = self._rows(
+                    query,
+                    {"from_name": source, "to_name": target, "limit": limit},
+                )
+            except Exception as exc:
+                log.warning("graph.path_failed", error=repr(exc))
+                continue
+            for row in rows:
+                triples.extend(_walk_triples(row[0]))
+
+        return _dedupe(triples)[:limit]
+
     def execute_read(self, cypher: str, limit: int = 50) -> list[Triple]:
         """Run a read-only Cypher query on the read-only connection."""
         try:
@@ -358,6 +399,27 @@ def _path_triples(start: str, path: dict, end: str) -> list[Triple]:
         target = names[index + 1] if index + 1 < len(names) else end
         triples.append(_triple(source, rel, target))
     return triples
+
+
+def _walk_triples(path: dict) -> list[Triple]:
+    """One triple per hop of a directed path.
+
+    Kuzu returns ``_nodes`` for a recursive path with **every** node on it,
+    endpoints included, so hop *i* runs from ``_nodes[i]`` to ``_nodes[i+1]``.
+    A walk that revisits a node is dropped: ``*1..3`` between two adjacent
+    entities happily returns A→B→A→B, which says nothing the single hop did not.
+    """
+    nodes = [str(node.get("name", "")) for node in (path.get("_nodes") or [])]
+    rels = path.get("_rels") or []
+
+    if len(nodes) != len(rels) + 1 or len(set(nodes)) != len(nodes):
+        return []
+
+    return [
+        _triple(nodes[index], rel, nodes[index + 1])
+        for index, rel in enumerate(rels)
+        if isinstance(rel, dict)
+    ]
 
 
 def _triple(source: str, rel: dict, target: str) -> Triple:

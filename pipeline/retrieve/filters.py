@@ -34,7 +34,7 @@ _SET_FIELDS = (
 )
 
 
-def _quote(value: str) -> str:
+def quote_literal(value: str) -> str:
     """A SQL string literal. Single quotes are doubled, which is the escape."""
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -80,16 +80,16 @@ class MetadataFilter(BaseModel):
             if not cleaned:
                 continue
             if len(cleaned) == 1:
-                clauses.append(f"{field} = {_quote(cleaned[0])}")
+                clauses.append(f"{field} = {quote_literal(cleaned[0])}")
             else:
-                clauses.append(f"{field} IN ({', '.join(_quote(v) for v in cleaned)})")
+                clauses.append(f"{field} IN ({', '.join(quote_literal(v) for v in cleaned)})")
 
         start = _iso_date(self.date_from)
         if start:
-            clauses.append(f"date >= {_quote(start)}")
+            clauses.append(f"date >= {quote_literal(start)}")
         end = _iso_date(self.date_to)
         if end:
-            clauses.append(f"date <= {_quote(end)}")
+            clauses.append(f"date <= {quote_literal(end)}")
 
         return " AND ".join(clauses) if clauses else None
 
@@ -138,4 +138,4 @@ def _iso_date(value: Optional[str]) -> Optional[str]:
     return parsed.date().isoformat()
 
 
-__all__ = ["MetadataFilter"]
+__all__ = ["MetadataFilter", "quote_literal"]
