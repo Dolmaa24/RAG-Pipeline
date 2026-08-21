@@ -231,6 +231,56 @@ multi-step, the supervisor can run locally. Between 40 and 70%, local specialist
 with a Groq supervisor. Below 40%, the fallback shim in phase 02 stops being
 optional and becomes the primary path for local models.
 
+### Result — 2026-08-22, 16 cases × 3 passes, temperature 0
+
+| | qwen2.5:3b | llama3.2:3b |
+|---|---|---|
+| well-formed call | 100% | 100% |
+| right tool | 92% | 92% |
+| right arguments | 90% | **100%** |
+| stops when no tool is needed | **0%** | **100%** |
+| declines an impossible request | **100%** | 50% |
+| multi-step follows the first result | 50% | **100%** |
+| invented a tool | 0 | 0 |
+| seconds per call | ~4 | ~7–9 |
+
+**The gate passes, and the plan was wrong about which part was risky.** Tool
+selection was the assumed weakness — the estimate here was "somewhere between
+half and three-quarters" — and both models hit 92% with zero fabrication across
+eleven tools. The phase-00 bet on flat arguments and descriptions written for
+models rather than humans is what that number is measuring, and it paid.
+
+**A local supervisor is viable.** Groq is now an optimisation, not a
+prerequisite, which matters because there is no API key on this machine.
+
+**The supervisor is `llama3.2:3b`, not `qwen2.5:3b`.** This is the opposite of
+the extraction benchmark's verdict, and both are right: different jobs, measured
+separately. qwen extracts better; llama drives a loop better on every axis except
+speed.
+
+**qwen2.5:3b must not lead a loop.** It stopped 0 times out of 6 — on "thanks,
+that's everything I needed" it called `corpus_profile`, on all three passes. A
+model that never concludes it is finished will exhaust `max_iterations` on every
+run, whatever the question. That single number does more to decide the
+architecture than the tool-selection score does, and averaging it with the trap
+cases — as the first version of this benchmark did — hid it completely.
+
+**Every failure was deterministic**: identical on all three passes at temperature
+0. These are systematic and therefore addressable by description and prompt
+changes, not noise to be averaged away. Two are worth fixing before phase 03:
+both models prefer `search_corpus` over `answer_from_corpus` for a self-contained
+cited question, and qwen loses the question across a turn (it searched for
+`query="engineering"` when asked to search *engineering* for *latency*).
+
+**What this promotes from safety net to load-bearing.** The phase-03 budget and
+the no-progress stop were written as guards against a model going wrong
+occasionally. With a supervisor that stops 0% of the time, they are the only
+reason a run terminates at all. Latency sharpens this: at ~8 s per call, the 90-
+second budget allows about ten turns, so `max_iterations = 8` is the binding
+constraint and should stay that way.
+
+*Reproduce:* `PYTHONPATH=. ./venv/bin/python -m bench.tool_calling --repeat 3`
+
 ## Phase 02 — Tool calling in the model layer (~3 days)
 
 The real code change. Extend the `LLMBackend` protocol with a second method:
@@ -400,10 +450,12 @@ Worth noting that the compliance layer already blocks the worst outcome — an
 injected fetch of `http://169.254.169.254/` is refused by the same private-address
 check that broke file uploads. That policy is now doing double duty.
 
-**2 · The local model may not be good enough to lead.** `qwen2.5:3b` selecting the
-right tool from eleven options, with the right arguments, several turns in a row,
-is a real question and not a rhetorical one. Plan for the supervisor to run on
-Groq and the specialists to stay local. Note the free-tier ceiling of 8,000 tokens
+**2 · ~~The local model may not be good enough to lead.~~ Measured, and it is —
+but not the one assumed.** See the gate result. Tool selection came back at 92%
+for both local models with zero fabrication. The real defect is narrower and
+worse: `qwen2.5:3b` never stops calling tools, so it can lead nothing. Run the
+supervisor on `llama3.2:3b`, keep `qwen2.5:3b` for extraction and single-shot
+specialist calls, and treat Groq as an optimisation rather than a requirement. Note the free-tier ceiling of 8,000 tokens
 per minute: an agent loop passing full observations back into context will hit
 that within two or three runs, so observations must be truncated at the tool
 boundary rather than the prompt boundary.
