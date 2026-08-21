@@ -7,14 +7,41 @@ both consume.*
 | | |
 |---|---|
 | **Written against** | `rag-pipeline` @ `0afe345` — 24,423 LOC, 298 tests |
+| **Now at** | `c6ca05a` — phase 00 shipped |
 | **New code, est.** | ~2,400 LOC |
 | **Phases** | 6, each shippable |
-| **Rendered version** | https://claude.ai/code/artifact/b066666c-aaa5-4684-94cb-b12fe1bacfc5 |
+| **Rendered version** | https://claude.ai/code/artifact/b066666c-aaa5-4684-94cb-b12fe1bacfc5 (snapshot; this file is authoritative) |
 
-> **Open decision.** This plan argues against adopting an agent framework (see
-> *What I'd leave out*). The current preference is to use **LangGraph** anyway,
-> which changes phases 3 and 4 but leaves 0, 1 and 2 untouched. Settle it before
-> starting phase 3.
+## Decisions settled — 2026-08-22
+
+Four questions were open when this was written. All four are now answered, and
+the plan below reflects them.
+
+**Orchestration: LangGraph.** This plan argued against a framework and still
+thinks Celery is the better scheduler — that argument is kept, marked
+superseded, under *What I'd leave out*, because the reasoning is worth having on
+record when the trade-offs show up. The decision is made: LangGraph drives the
+loop. What changes is phases 03 and 04; phases 00, 01 and 02 are untouched,
+because a tool registry and a tool-calling model layer are prerequisites for any
+orchestrator. What does not change is the containment rule — **LangGraph lives
+only inside `pipeline/agents/`, and reaches the rest of the system through the
+tool registry, never by importing `pipeline.retrieve` directly.** That keeps the
+blast radius to one package if it ever comes back out.
+
+**Locality: local by default, hosted opt-in.** Retrieval, embedding and
+synthesis stay on Ollama. The supervisor may run on Groq, routed by
+`AGENT_BACKEND` separately from the extraction backend, exactly as phase 02
+describes. Note the machine has **no `.env` and no `GROQ_API_KEY` at present**,
+so the hosted half of this is currently untestable — the benchmark gate below
+can only score the local model until a key exists.
+
+**Ordering: MCP server first.** Phases 00 → 01 before any agent loop, so the
+tools can be driven by hand from an external client and proven before a model
+tries to drive them. This is already the plan's order.
+
+**Agent actions: retrieval, graph query, extraction, and indexing.** No
+write-back or export tools — nothing that leaves the system. This adds two tools
+the catalog does not yet have; see the gap marked in the table below.
 
 ## The central decision: one registry, two consumers
 
@@ -100,6 +127,16 @@ helpful.
 | `extract_url` | `tasks.extract_url` | write | 5–60 s |
 | `crawl_site` | `tasks.crawl_site` | write | minutes |
 | `poll_task` | `AsyncResult` | read | ~5 ms |
+| `index_document` † | `tasks.index_document` | write | 5–90 s |
+| `build_graph` † | `pipeline.graph.builder` | write | 30 s–minutes |
+
+† **Not yet built.** The settled scope includes indexing and graph construction
+as things an agent may deliberately do, rather than side effects of extraction —
+"we fetched this, now make it searchable" and "now extract its entities" as two
+decisions the trace can show separately. Both wrap tasks that already exist and
+both are `write`, so they inherit the opt-in gate. Add them to
+`pipeline/agents/tools/acquire.py` before phase 04, when an acquisition agent
+first has reason to call them.
 
 The three effect classes carry different permissions. **read** touches only what
 has already been indexed and is always available. **network** reaches the outside
@@ -109,7 +146,7 @@ exactly as they do today.
 
 ---
 
-## Phase 00 — Tool contracts (~2 days)
+## Phase 00 — Tool contracts ✅ shipped in `c6ca05a`
 
 New package `pipeline/agents/tools/`. A `@tool` decorator that registers a name, a
 description written for a model rather than a human, a Pydantic argument model
@@ -164,6 +201,36 @@ having nothing.
 README, and one end-to-end transcript of a multi-hop question answered from the
 corpus through an external client.
 
+## Gate — the tool-selection benchmark (half a day, run first)
+
+`bench/tool_calling.py`. Everything from phase 02 onward rests on an assumption
+that has never been measured here: **that a model small enough to fit on this
+machine can pick the right tool, with the right arguments, several turns running.**
+If it cannot, the supervisor belongs on Groq, and that changes which parts of
+phase 04 are reachable offline.
+
+It is cheap to answer, so answer it before building on it. The benchmark reads
+the tool schemas straight out of the phase-00 registry — `describe_all()` — so it
+scores the catalog that actually exists rather than a hand-written copy that can
+drift from it, and it needs no new dependency: Ollama's `/api/chat` accepts a
+`tools` array today.
+
+Scored per model, on prompts with a known-correct answer:
+
+| Check | What it catches |
+|---|---|
+| well-formed | Did it emit a parseable tool call at all, or prose describing one? |
+| right tool | Picked from the catalog, for a question with one obvious answer. |
+| right arguments | Required fields present, values drawn from the question. |
+| no fabrication | Invented tool names, invented arguments. |
+| knows to stop | A question needing no tool must not trigger one. |
+| multi-step | Given a first result, does the second call follow from it? |
+
+**The decision this gate makes.** Roughly: above ~70% on right-tool with clean
+multi-step, the supervisor can run locally. Between 40 and 70%, local specialists
+with a Groq supervisor. Below 40%, the fallback shim in phase 02 stops being
+optional and becomes the primary path for local models.
+
 ## Phase 02 — Tool calling in the model layer (~3 days)
 
 The real code change. Extend the `LLMBackend` protocol with a second method:
@@ -191,22 +258,28 @@ def complete_with_tools(
 Add `AGENT_BACKEND` as routing separate from the extraction backend, so the
 supervisor can run on Groq while extraction stays local and private.
 
-**Measure before building on it.** Extend `bench/graph_models.py` into a
-tool-selection benchmark: thirty prompts with a known correct tool and arguments,
-scored for right tool, right arguments, and fabricated tool names. You have been
-burned before by a prompt change that looked good on one document and regressed
-across the set. Assume a 3B model will select correctly somewhere between half and
-three-quarters of the time and let the number, not the hope, decide whether the
-supervisor runs locally.
+**Measure before building on it** — this is the gate above, and it now runs
+ahead of this phase rather than inside it. You have been burned before by a
+prompt change that looked good on one document and regressed across the set. Let
+the number, not the hope, decide whether the supervisor runs locally.
 
 **Ships:** both backends tool-calling behind one interface, the fallback shim, and
 a scored benchmark table per model.
 
-## Phase 03 — The loop, and its budget (~3 days)
+## Phase 03 — The loop, and its budget (~3 days, LangGraph)
 
-`pipeline/agents/loop.py`. One bounded loop: send messages and tools, receive
-either tool calls or final text, execute, append observations, repeat. Roughly 250
-lines. The interesting part is not the loop, it is everything that stops it.
+`pipeline/agents/loop.py`, built as a LangGraph `StateGraph`. Nodes for *act*
+and *observe*, a conditional edge back to *act* while the model keeps calling
+tools, and an edge out to synthesis when it stops. The interesting part is not
+the loop — LangGraph gives you that — it is everything that stops it, and none of
+that comes from the framework.
+
+Tool execution stays on `invoke()` from the phase-00 registry rather than
+LangGraph's own `ToolNode`. The registry already enforces effects, validates
+arguments and turns every failure into an observation instead of an exception;
+`ToolNode` does none of that, and routing through it would mean the MCP server
+and the loop no longer share a code path — which is the one thing this design
+exists to prevent.
 
 ```python
 class Budget:
@@ -232,7 +305,7 @@ class Budget:
 budget exhaustion, no-progress detection and parallel dispatch all covered without
 a model running.
 
-## Phase 04 — The agents (~4 days, acquisition gated)
+## Phase 04 — The agents (~4 days, acquisition gated, LangGraph)
 
 A supervisor delegating to specialists — a star, not a mesh. Two reasons: with a
 small model, fewer decisions per call is strictly better; and a star topology
@@ -371,11 +444,20 @@ phase so a regression is attributable to a change rather than to a mood.
 
 ## What I'd leave out
 
-**Any agent framework.** LangGraph, CrewAI and AutoGen all bring a scheduler, a
-state store and a retry model. You already have all three, better suited and
-already in production here. Their orchestration would fight Celery's, and the part
-you actually need — a tool registry and a bounded loop — is roughly 500 lines you
-will understand completely.
+**~~Any agent framework.~~** *Superseded 2026-08-22: LangGraph was chosen.* The
+argument is kept because it names the costs to watch for rather than being wrong.
+LangGraph, CrewAI and AutoGen all bring a scheduler, a state store and a retry
+model; you already have all three, better suited and already in production here.
+Their orchestration can fight Celery's, and the part you actually need — a tool
+registry and a bounded loop — is roughly 500 lines you would understand
+completely.
+
+What that costs, concretely, and how it is contained: LangGraph's checkpointer is
+**off**, because Celery owns durability and two retry models over one job is how
+work gets done twice. LangGraph is confined to `pipeline/agents/`. Tool execution
+stays on the registry, not `ToolNode`. Under those three rules the framework is
+providing graph structure and streaming, which is a fair trade for the dependency
+and a genuinely portable skill.
 
 **Agent-to-agent conversation.** Specialists return to the supervisor. Free-form
 chatter between agents multiplies token cost, makes traces unreadable, and
@@ -394,4 +476,5 @@ Claude Desktop can drive, which is a complete and demonstrable capability on its
 own. Phase 2 is the fundamental one and is worth doing regardless, because tool
 calling in the model layer is a missing primitive rather than an agent feature.
 Phases 3 to 5 are what make the pipeline self-directing, and are the right place
-to stop if the tool-selection benchmark comes back weak.
+to stop if the tool-selection benchmark comes back weak — which is why that
+benchmark is now a gate ahead of phase 2 rather than a step inside it.
