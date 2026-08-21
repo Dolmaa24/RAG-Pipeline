@@ -180,3 +180,39 @@ def test_a_broken_reranker_keeps_the_fused_order(fake_store, monkeypatch):
 
     result = retrieve("x", retriever=_retriever(fake_store), use_graph=False, rerank_results=True)
     assert result.chunks
+
+
+def test_no_graph_yet_is_not_an_error(fake_store, tmp_path, monkeypatch):
+    """Until someone builds a graph there isn't one, and that is normal.
+
+    Kuzu refuses to create a database read-only and says so in its own terms —
+    "Cannot create an empty database under READ ONLY mode" — which is not a
+    sentence anyone searching a corpus should be shown.
+    """
+    from config import config
+    from pipeline.graph.traverse import GraphRetriever
+
+    monkeypatch.setattr(config, "KUZU_DB_PATH", str(tmp_path / "never-built"))
+
+    result = retrieve(
+        "anything",
+        retriever=_retriever(fake_store),
+        graph=GraphRetriever(),
+        use_graph=True,
+    )
+    assert result.chunks
+    assert result.triples == []
+    assert result.warnings == []
+
+
+def test_graph_exists_reports_the_truth(tmp_path, monkeypatch):
+    from config import config
+    from pipeline.graph.store import GraphStore, graph_exists
+
+    path = str(tmp_path / "kuzu")
+    monkeypatch.setattr(config, "KUZU_DB_PATH", path)
+    assert graph_exists() is False
+
+    with GraphStore(db_path=path) as store:
+        store.upsert([], [])
+    assert graph_exists() is True

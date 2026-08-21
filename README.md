@@ -236,8 +236,11 @@ idempotency comes from the database rather than from application logic.
 
 ## Indexing for retrieval
 
-Off by default. Turn it on and a document that finishes extraction is also
-cleaned, split, embedded and written to a local LanceDB table:
+**On by default** — a feature that is off by default is a feature nobody has.
+Every document that finishes extraction is also cleaned, split, embedded and
+written to a local LanceDB table, and is then searchable from the dashboard's
+Search tab or `POST /api/v1/search`. Pass `"index": false` to skip it for a job
+that only wants structured JSON:
 
 ```bash
 curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -d '{
@@ -260,7 +263,7 @@ Everything else gets fixed windows.
 | Shape | Strategy |
 |---|---|
 | Three or more markdown headings | `hierarchical` — split on headings, heading path kept as the section name |
-| Ten or more lines averaging under 50 characters | `llm` — a model repairs the text and splits it, falling back to `fixed` if no model is reachable |
+| Ten or more lines averaging under 50 characters | `fixed` — see below |
 | Over 2000 characters of prose | `semantic` — split where the embedding similarity drops |
 | Anything else | `fixed` — overlapping character windows |
 
@@ -268,6 +271,14 @@ A run report says which strategy *ran*, not which was chosen: when the model is
 unreachable the `llm` strategy falls back to fixed windows and reports `fixed`,
 because a number claiming a model ran on a machine where none did is worse than
 no number.
+
+**The router will not choose `llm` on its own.** Short lines mean OCR damage in
+a scanned document and a navigation menu in a web page, and the test cannot tell
+them apart. Since indexing is on by default, guessing wrong means a model call
+per document on ordinary pages — measured at 39 seconds and 78 chunks for one
+page of quotes, against 85 milliseconds and 7 chunks once the router was
+corrected. Set `INDEX_AGENTIC_ALLOW_LLM=true` for a corpus of scans, or ask for
+`INDEX_CHUNK_STRATEGY=llm` directly.
 
 **Indexing is a separate task on the cpu queue**, not a stage in the runner.
 Embedding is a transformer forward pass, and `extract_url` runs on the io pool
@@ -314,6 +325,12 @@ curl -X POST localhost:8000/api/v1/search -H 'Content-Type: application/json' -d
   "limit": 10, "use_graph": true
 }'
 ```
+
+The dashboard's **Search** tab is the same thing with a UI: a question box,
+filter pickers populated from what is actually indexed, fusion and rerank
+controls, and results showing score, source and which leg found each passage.
+The sidebar reports how many chunks and graph entities exist, which is the first
+thing to check when a search returns nothing.
 
 Chunks and triples come back with their provenance. **Nothing here writes an
 answer** — retrieval returns evidence and the orchestrator above it decides what
@@ -487,10 +504,16 @@ Six things changed in the port:
 - **Every node and edge carries provenance** — source URL and content hash. A
   triple you cannot trace is one you cannot check or expire.
 
-Graph building is one model call per chunk, so it is opt-in per job
-(`"build_graph": true`), never implicit — and **cached on the chunk's content
-hash**, because it is both the most expensive call here and a perfectly
-deterministic one. Measured on the same document:
+Graph building is **on by default** — the graph is half of what "hybrid and
+graph retrieval" means, and one nobody builds answers no questions. It costs one
+model call per `MAX_CHUNK_SIZE` **window** of a document, not per chunk as an
+earlier version of this file said, which still makes it the slowest part of
+ingest; pass `"build_graph": false` to skip it. Long documents are windowed
+rather than truncated — an earlier version passed only the first 12,000
+characters, so a fifty-page PDF produced a graph of its first four pages and
+said nothing about the rest. Results are **cached on the content hash**, because
+this is both the most expensive call here and a perfectly deterministic one.
+Measured on the same document:
 
 ```
 first build    23.7s      extraction 9.8s
@@ -508,6 +531,44 @@ processes coexist, but one read-write handle blocks every other open, including
 read-only ones. So retrieval opens read-only and ingest opens, writes and
 closes — a worker holding the write lock would make search fail for as long as
 it was alive.
+
+---
+
+## Answering
+
+Retrieval finds the evidence. This is the part that answers the question:
+
+```bash
+curl -X POST localhost:8000/api/v1/answer -H 'Content-Type: application/json' -d '{
+  "query": "Who said the world as we have created it is a process of our thinking?"
+}'
+```
+
+```json
+{"answer": "Albert Einstein", "sufficient": true, "cited": [1],
+ "sources": [{"number": 1, "kind": "passage", "origin": "https://quotes.toscrape.com/page/1/"}]}
+```
+
+The dashboard's Search tab does the same with **Answer the question** selected,
+showing the answer above the passages and an expander listing exactly what the
+model was allowed to read, each marked cited or not.
+
+Three properties matter more than the prose:
+
+**Every claim carries a number.** Sources are numbered in the prompt and the
+answer refers to them as `[1]`. Citations are read back out of the answer text
+rather than trusted from a separate field, because what the model wrote into the
+sentence is what it actually used.
+
+**"We don't have that" is a real outcome.** A model handed six passages will
+compose something from them whether or not they are relevant, so `sufficient` is
+asked for separately. A small model often returns that verdict with no prose at
+all, so an empty answer is turned into the sentence the verdict means rather
+than shown as a blank box.
+
+**A dead model does not lose the evidence.** If generation fails, the passages
+and triples still come back with a warning attached — the retrieval was real
+even when the prose is not.
 
 ---
 
@@ -655,6 +716,7 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | `GET /api/v1/detect` | What the pipeline *would* do with a URL, before committing. |
 | `GET /api/v1/stats` | Tier breakdown, cache hit rates, breaker state. |
 | `GET /api/v1/specs` | The selector specs learned per domain. |
+| `POST /api/v1/answer` | Ask a question; get an answer that cites its sources. |
 | `GET /health` | Workers, queue depth, Redis, Mongo, both LLM backends. |
 
 Useful request options: `allowed_tiers` (e.g. `[1]` for structured data only,
@@ -791,7 +853,7 @@ Two defaults cost real time and one costs correctness:
 PYTHONPATH=. ./venv/bin/python -m pytest tests/ -q
 ```
 
-241 tests, all offline — no network, no Ollama, no model download. The dense
+262 tests, all offline — no network, no Ollama, no model download. The dense
 embedder and the LLM backends are faked where a test only needs *a* vector or
 *an* answer; the one test that loads BGE for real is marked `slow`:
 
@@ -833,7 +895,7 @@ pipeline/
   retrieve/     query understanding, hybrid search, fusion, reranking
   graph/        GLiNER entities, relations, direction checks, Kuzu, cache
   runner.py     the pipeline itself
-tests/          241 offline tests; one marked `slow` loads the real model
+tests/          262 offline tests; one marked `slow` loads the real model
 ```
 
 ## Notes and limitations
@@ -853,9 +915,11 @@ tests/          241 offline tests; one marked `slow` loads the real model
 - Tier 1's field mapping uses a synonym table (`FIELD_SYNONYMS`). A schema using
   unusual field names may fall through to a later tier; adding a synonym is a
   one-line change.
-- **Graph building is one model call per chunk**, and on Groq's free tier
-  (8000 TPM) that is the binding constraint on ingest — not CPU. A large
-  document will rate-limit long before it finishes.
+- **Graph building is one model call per `MAX_CHUNK_SIZE` window**, and on
+  Groq's free tier (8000 TPM) that is the binding constraint on ingest — not
+  CPU. A long document will rate-limit before it finishes. `GRAPH_MAX_WINDOWS`
+  caps how far into a very long document the graph goes, and a document past
+  that cap logs a warning rather than silently stopping.
 - **The Cypher agent is off by default.** Neither local model writes Cypher
   Kuzu reliably accepts — `qwen2.5:3b` 2/5, `llama3.2:3b` 1/5 — so the fixed
   template answers anyway: 39ms against the agent's 1.9s for identical triples.
@@ -870,6 +934,10 @@ tests/          241 offline tests; one marked `slow` loads the real model
   re-measure when you change the model; do not change the extraction prompt
   without running it, because a one-word change that recovered an entity also
   reversed an edge.
+- **Metadata is per-document, so a page with many authors gets one.** The
+  `author` on every chunk of a page comes from that page's JSON-LD or OpenGraph.
+  On a page of quotes by different people, every chunk carries whichever author
+  the markup named. Filter on it accordingly.
 - **Direction validation only covers the verbs it knows.** A relation outside
   `RULES` in `pipeline/graph/validate.py`, or one between two same-typed
   entities with no usable word order, is left as the model wrote it. It reduces

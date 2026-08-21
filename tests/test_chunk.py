@@ -18,8 +18,22 @@ def test_headings_choose_hierarchical(make_doc):
     assert DocumentChunker().decide_strategy(make_doc(text)) == "hierarchical"
 
 
-def test_short_lines_choose_the_model(make_doc):
-    # An OCR'd table: many lines, none of them a sentence.
+def test_short_lines_do_not_reach_the_model_by_default(make_doc):
+    """Short lines mean OCR damage in a scan and a nav menu in a web page.
+
+    This test cannot tell them apart and neither can the router, so with
+    indexing on by default it must not spend a model call guessing. Measured
+    cost of guessing wrong on one ordinary HTML page: 39s and 78 chunks.
+    """
+    text = "\n".join(f"col{i} 12.{i}" for i in range(40))
+    assert DocumentChunker().decide_strategy(make_doc(text)) == "fixed"
+
+
+def test_short_lines_choose_the_model_when_allowed(make_doc, monkeypatch):
+    """Opting in is how a corpus of scanned documents gets the model."""
+    from config import config
+
+    monkeypatch.setattr(config, "INDEX_AGENTIC_ALLOW_LLM", True)
     text = "\n".join(f"col{i} 12.{i}" for i in range(40))
     assert DocumentChunker().decide_strategy(make_doc(text)) == "llm"
 

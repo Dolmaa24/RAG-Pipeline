@@ -134,6 +134,14 @@ class GraphExtractor:
         content_hash: str = "",
         local_only: bool = False,
     ) -> KnowledgeGraphExtraction:
+        """Build a graph from the whole document, not just the front of it.
+
+        Long text goes through in windows and the results are merged. An earlier
+        version passed ``text[:MAX_CHUNK_SIZE]`` to a single call, which meant a
+        fifty-page PDF produced a graph of its first four pages and said nothing
+        about the rest — the sort of omission that looks exactly like the
+        document simply not mentioning something.
+        """
         if not text or not text.strip():
             return KnowledgeGraphExtraction()
 
@@ -160,33 +168,43 @@ class GraphExtractor:
         if cached is not None:
             return cached
 
-        if use_gliner:
-            extraction = self._with_gliner(
-                text, backend, source_url=source_url, content_hash=content_hash
+        windows = _windows(text)
+        entities: list[Entity] = []
+        relationships: list[Relationship] = []
+
+        for index, window in enumerate(windows):
+            part = self._extract_window(
+                window,
+                backend,
+                use_gliner=use_gliner,
+                source_url=source_url,
+                content_hash=content_hash,
             )
-            if extraction is not None:
-                self.cache.put(key, prompt_key, model, extraction, url=source_url)
-                return extraction
-            # GLiNER unavailable: fall through to the all-in-one model call.
-
-        try:
-            with metrics.timer("graph.extract"):
-                response = backend.complete_json(
-                    prompt=_PROMPT,
-                    content=text[: config.MAX_CHUNK_SIZE],
-                    schema_hint=_SCHEMA_HINT,
-                    json_schema=_JSON_SCHEMA,
+            if part is None:
+                # GLiNER unavailable on the first window: redo the whole
+                # document the all-in-one way rather than mixing two shapes.
+                use_gliner = False
+                prompt_key = _PROMPT
+                cached = self.cache.get(key, prompt_key, model)
+                if cached is not None:
+                    return cached
+                part = self._extract_window(
+                    window,
+                    backend,
+                    use_gliner=False,
+                    source_url=source_url,
+                    content_hash=content_hash,
                 )
-            data = response.data or {}
-        except Exception as exc:
-            log.warning("graph.extract_failed", url=source_url[:80], error=repr(exc))
-            metrics.incr("graph.extract.failed")
-            return KnowledgeGraphExtraction()
+            if part is None:
+                continue
 
-        entities = _entities(data.get("entities"), source_url, content_hash)
-        relationships = _relationships(
-            data.get("relationships"), source_url, content_hash, {e.name for e in entities}
-        )
+            entities.extend(part.entities)
+            relationships.extend(part.relationships)
+            if len(windows) > 1:
+                log.debug("graph.window_done", window=index + 1, of=len(windows))
+
+        entities = _merge_entities(entities)
+        relationships = _merge_relationships(relationships, {e.name for e in entities})
 
         # Before the cache, so a stored extraction is already corrected and a
         # re-ingest does not repeat the work.
@@ -200,9 +218,48 @@ class GraphExtractor:
             url=source_url[:80],
             entities=len(entities),
             relationships=len(relationships),
+            windows=len(windows),
+            entity_backend="gliner" if use_gliner else "llm",
         )
         return extraction
 
+    def _extract_window(
+        self,
+        window: str,
+        backend,
+        *,
+        use_gliner: bool,
+        source_url: str,
+        content_hash: str,
+    ) -> Optional[KnowledgeGraphExtraction]:
+        """One window. ``None`` means GLiNER was asked for and is unavailable."""
+        if use_gliner:
+            return self._with_gliner(
+                window, backend, source_url=source_url, content_hash=content_hash
+            )
+
+        try:
+            with metrics.timer("graph.extract"):
+                response = backend.complete_json(
+                    prompt=_PROMPT,
+                    content=window,
+                    schema_hint=_SCHEMA_HINT,
+                    json_schema=_JSON_SCHEMA,
+                )
+            data = response.data or {}
+        except Exception as exc:
+            # One bad window must not lose the rest of the document.
+            log.warning("graph.extract_failed", url=source_url[:80], error=repr(exc))
+            metrics.incr("graph.extract.failed")
+            return KnowledgeGraphExtraction()
+
+        found = _entities(data.get("entities"), source_url, content_hash)
+        return KnowledgeGraphExtraction(
+            entities=found,
+            relationships=_relationships(
+                data.get("relationships"), source_url, content_hash, {e.name for e in found}
+            ),
+        )
 
     def _with_gliner(
         self,
@@ -287,6 +344,70 @@ class GraphExtractor:
                 count=len(corrections),
             )
         return corrected
+
+
+def _windows(text: str) -> list[str]:
+    """Split a document into model-sized pieces, capped.
+
+    Split on a paragraph boundary where there is one nearby, so an entity is
+    less likely to be cut in half. The cap exists because a very long document
+    would otherwise become an unbounded number of model calls.
+    """
+    size = config.MAX_CHUNK_SIZE
+    if len(text) <= size:
+        return [text]
+
+    windows: list[str] = []
+    start = 0
+    while start < len(text) and len(windows) < config.GRAPH_MAX_WINDOWS:
+        end = min(start + size, len(text))
+        if end < len(text):
+            # Prefer a paragraph break in the last fifth of the window.
+            split = text.rfind("\n\n", start + (size * 4) // 5, end)
+            if split > start:
+                end = split
+        windows.append(text[start:end])
+        start = end
+
+    if start < len(text):
+        log.warning(
+            "graph.windows_capped",
+            cap=config.GRAPH_MAX_WINDOWS,
+            covered=start,
+            total=len(text),
+        )
+    return windows
+
+
+def _merge_entities(entities: list[Entity]) -> list[Entity]:
+    """One entity per name across every window, keeping the fullest description."""
+    best: dict[str, Entity] = {}
+    for entity in entities:
+        key = entity.name.strip().lower()
+        if not key:
+            continue
+        current = best.get(key)
+        if current is None or len(entity.description) > len(current.description):
+            best[key] = entity
+    return list(best.values())
+
+
+def _merge_relationships(
+    relationships: list[Relationship], known: set[str]
+) -> list[Relationship]:
+    """One edge per (source, relation, target), endpoints restricted to real nodes."""
+    lowered = {name.lower() for name in known}
+    seen: set[tuple[str, str, str]] = set()
+    out: list[Relationship] = []
+    for rel in relationships:
+        if rel.source.lower() not in lowered or rel.target.lower() not in lowered:
+            continue
+        key = (rel.source.lower(), rel.relation.upper(), rel.target.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rel)
+    return out
 
 
 def _entities(raw, source_url: str, content_hash: str) -> list[Entity]:

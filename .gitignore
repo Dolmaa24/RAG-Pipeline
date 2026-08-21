@@ -43,5 +43,7 @@ huggingface/
 
 # Vector store and knowledge graph
 lance_data/
+kuzu_db
 kuzu_db/
+kuzu_db.wal
 chroma_data/

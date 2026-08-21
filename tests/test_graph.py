@@ -441,3 +441,65 @@ def test_the_builder_releases_the_store_it_opened(tmp_path: Path, fake_backend, 
     # If the lock were still held, opening read-write here would raise.
     with GraphStore(db_path=str(tmp_path / "kuzu")) as store:
         assert store.count()["entities"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Windowing — the whole document reaches the graph, not just its front
+# --------------------------------------------------------------------------- #
+
+
+def test_a_long_document_is_windowed_not_truncated(fake_backend, monkeypatch):
+    """The earlier version passed text[:MAX_CHUNK_SIZE] to one call, so a long
+    PDF produced a graph of its first few pages and said nothing about the rest.
+    """
+    from config import config
+    from pipeline.graph.cache import GraphCache
+
+    monkeypatch.setattr(config, "MAX_CHUNK_SIZE", 100)
+    monkeypatch.setattr(config, "GRAPH_ENTITY_BACKEND", "llm")
+
+    backend = fake_backend(
+        {"entities": [{"name": "ACME", "type": "Organization", "description": "a firm"}],
+         "relationships": []}
+    )
+    GraphExtractor(backend=backend, cache=GraphCache()).extract("word " * 200)
+    assert backend.calls > 1
+
+
+def test_windowing_is_capped(fake_backend, monkeypatch):
+    from config import config
+    from pipeline.graph.cache import GraphCache
+
+    monkeypatch.setattr(config, "MAX_CHUNK_SIZE", 50)
+    monkeypatch.setattr(config, "GRAPH_MAX_WINDOWS", 3)
+    monkeypatch.setattr(config, "GRAPH_ENTITY_BACKEND", "llm")
+
+    backend = fake_backend({"entities": [], "relationships": []})
+    GraphExtractor(backend=backend, cache=GraphCache()).extract("word " * 500)
+    assert backend.calls == 3
+
+
+def test_entities_are_merged_across_windows(fake_backend, monkeypatch):
+    """The same company named in three windows is one node, not three."""
+    from config import config
+    from pipeline.graph.cache import GraphCache
+
+    monkeypatch.setattr(config, "MAX_CHUNK_SIZE", 100)
+    monkeypatch.setattr(config, "GRAPH_ENTITY_BACKEND", "llm")
+
+    backend = fake_backend(
+        {"entities": [{"name": "ACME", "type": "Organization", "description": "a firm"}],
+         "relationships": []}
+    )
+    result = GraphExtractor(backend=backend, cache=GraphCache()).extract("word " * 200)
+    assert [e.name for e in result.entities] == ["ACME"]
+
+
+def test_a_short_document_is_still_one_call(fake_backend, monkeypatch):
+    from config import config
+    from pipeline.graph.cache import GraphCache
+
+    monkeypatch.setattr(config, "GRAPH_ENTITY_BACKEND", "llm")
+    backend = fake_backend({"entities": [], "relationships": []})
+    GraphExtractor(backend=backend, cache=GraphCache()).extract("a short sentence")
+    assert backend.calls == 1

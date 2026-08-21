@@ -44,6 +44,18 @@ from pipeline.graph.schema import Entity, Relationship, Triple
 log = get_logger("graph.store")
 
 
+def graph_exists(db_path: Optional[str] = None) -> bool:
+    """Whether a graph has ever been built at this path.
+
+    Worth asking before opening read-only: Kuzu refuses to create a database in
+    that mode, and the error it raises — "Cannot create an empty database under
+    READ ONLY mode" — describes its own internals rather than the user's
+    situation, which is simply that nothing has been ingested into a graph yet.
+    """
+    path = db_path or config.KUZU_DB_PATH
+    return os.path.exists(path)
+
+
 class GraphStore:
     """Entities and their relationships, in an embedded Kuzu database."""
 
@@ -359,4 +371,4 @@ def _triple(source: str, rel: dict, target: str) -> Triple:
     )
 
 
-__all__ = ["GraphStore"]
+__all__ = ["GraphStore", "graph_exists"]

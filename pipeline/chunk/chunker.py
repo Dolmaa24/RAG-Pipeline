@@ -104,11 +104,19 @@ class DocumentChunker:
             return "hierarchical"
 
         lines = [line for line in text.splitlines() if line.strip()]
-        if (
+        noisy = (
             len(lines) >= _NOISY_MIN_LINES
             and (len(text) / len(lines)) < _NOISY_MAX_LINE_LENGTH
-        ):
-            return "llm" if config.ENABLE_TIER3_LLM else "fixed"
+        )
+        if noisy:
+            # Short lines mean OCR damage in a scanned document and a navigation
+            # menu in an HTML one, and this test cannot tell them apart. Since
+            # indexing is on by default, guessing wrong costs a model call per
+            # document on ordinary pages — so the model-assisted splitter is
+            # reachable only by asking for it.
+            if config.INDEX_AGENTIC_ALLOW_LLM and config.ENABLE_TIER3_LLM:
+                return "llm"
+            return "fixed"
 
         if len(text) > _SEMANTIC_MIN_CHARS:
             return "semantic"

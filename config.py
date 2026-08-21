@@ -205,14 +205,22 @@ class EngineConfig(BaseSettings):
     # ------------------------------------------------------------------ #
     # Phase 6 — indexing for retrieval
     # ------------------------------------------------------------------ #
-    #: Off by default. Indexing loads a sentence-transformer and writes a vector
-    #: store, which is real memory and real disk that a caller who only wants
-    #: structured JSON should not be paying for.
-    INDEX_ENABLED: bool = False
+    #: On by default: retrieval is the point of indexing, and a feature that is
+    #: off by default is a feature nobody has. The cost is a ~130 MB embedding
+    #: model resident per cpu worker and a local vector table. Turn it off for a
+    #: job that only wants structured JSON out.
+    INDEX_ENABLED: bool = True
     #: "agentic" reads the document's shape and picks one of the others.
     INDEX_CHUNK_STRATEGY: Literal[
         "agentic", "fixed", "semantic", "hierarchical", "llm"
     ] = "agentic"
+    #: Whether the agentic router may choose the model-assisted splitter.
+    #: Off, and deliberately so: indexing is on by default, and a default-on
+    #: feature must not silently start making a model call per document. It also
+    #: misfires — a page of quotes and tag lists has short lines and reads as OCR
+    #: damage, which cost 39s and 78 chunks for one HTML page. "llm" stays
+    #: available by asking for it, which is where a scanned document wants it.
+    INDEX_AGENTIC_ALLOW_LLM: bool = False
     #: Characters, not tokens. Distinct from MAX_CHUNK_SIZE, which is how much
     #: text the *extraction* stage sends to a model — a different question.
     INDEX_CHUNK_SIZE: int = 1000
@@ -278,10 +286,25 @@ class EngineConfig(BaseSettings):
     RETRIEVE_REFINE_FACTOR: int = 10
 
     # ------------------------------------------------------------------ #
+    # Phase 8 — answering
+    # ------------------------------------------------------------------ #
+    #: How many retrieved passages are put in front of the model. More context
+    #: is not more accuracy: past a handful the answer starts drifting toward
+    #: whatever is longest rather than whatever is relevant.
+    ANSWER_MAX_PASSAGES: int = 6
+    ANSWER_MAX_TRIPLES: int = 20
+    #: Characters of any single passage included. A whole page in one slot
+    #: crowds out the other five.
+    ANSWER_MAX_PASSAGE_CHARS: int = 1200
+
+    # ------------------------------------------------------------------ #
     # Phase 7 — knowledge graph
     # ------------------------------------------------------------------ #
-    #: Extraction is one model call per chunk, so this is opt-in per job.
-    GRAPH_ENABLED: bool = False
+    #: On by default: the graph is half of what "hybrid + graph retrieval" means,
+    #: and a graph nobody builds answers no questions. It costs one model call
+    #: per MAX_CHUNK_SIZE window of a document, so it is the slowest part of
+    #: ingest — turn it off for a job that only wants passages back.
+    GRAPH_ENABLED: bool = True
     #: Cache graph extraction on the chunk's content hash, so re-ingesting an
     #: unchanged document costs a lookup instead of a model call per chunk.
     GRAPH_CACHE_ENABLED: bool = True
@@ -299,6 +322,11 @@ class EngineConfig(BaseSettings):
     GRAPH_NER_LABELS: str = "person,organization,location,product,project,technology,event"
     GRAPH_NER_THRESHOLD: float = 0.5
     KUZU_DB_PATH: str = "./kuzu_db"
+    #: Ceiling on model calls for one document's graph. Long text goes through
+    #: in MAX_CHUNK_SIZE windows rather than being truncated at the first one,
+    #: which used to mean a long PDF produced a graph of its first few pages
+    #: and said nothing about the rest.
+    GRAPH_MAX_WINDOWS: int = 8
     GRAPH_MAX_HOPS: int = 2
     #: Cap on rows returned by a traversal. A well-connected node in a
     #: two-hop query fans out combinatorially.

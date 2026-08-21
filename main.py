@@ -136,6 +136,19 @@ def _index(item: ExtractionItem) -> None:
         # A failed index must not cost you the extraction you already have.
         log.warning("batch.index_failed", url=item.url, error=repr(exc))
 
+    if not config.GRAPH_ENABLED:
+        return
+    try:
+        from pipeline.graph.builder import build_graph
+
+        build_graph(
+            text[: config.INDEX_MAX_TEXT_CHARS],
+            source_url=item.canonical_url or item.url,
+            content_hash=item.content_hash or "",
+        )
+    except Exception as exc:
+        log.warning("batch.graph_failed", url=item.url, error=repr(exc))
+
 
 def _print_summary(report: RunReport, results_path: Path, report_path: Path) -> None:
     tiers = ", ".join(f"{method}={count}" for method, count in sorted(report.by_method.items()))

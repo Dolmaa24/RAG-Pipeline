@@ -571,6 +571,48 @@ def search(request: SearchRequest) -> dict:
     return result.to_dict()
 
 
+@app.post("/api/v1/answer", tags=["retrieve"])
+def answer(request: SearchRequest) -> dict:
+    """Ask a question and get an answer, grounded in what was retrieved.
+
+    The answer cites its sources by number and reports whether the corpus
+    actually covered the question, so "we do not have that" is a real outcome
+    rather than a paragraph that hedges.
+    """
+    try:
+        from pipeline.retrieve import MetadataFilter, answer_question
+    except Exception as exc:
+        raise HTTPException(503, f"answering is unavailable: {exc}") from exc
+
+    try:
+        filters = MetadataFilter(**request.filters) if request.filters else None
+    except Exception as exc:
+        raise HTTPException(400, f"bad filters: {exc}") from exc
+
+    try:
+        reply = answer_question(
+            request.query,
+            filters=filters,
+            limit=request.limit,
+            use_graph=request.use_graph,
+            rerank_results=request.rerank,
+            rewrite=request.rewrite,
+            local_only=request.local_only,
+        )
+    except Exception as exc:
+        log.exception("api.answer_failed", query=request.query[:80], error=repr(exc))
+        raise HTTPException(500, f"answering failed: {exc}") from exc
+
+    log.info(
+        "api.answer",
+        query=request.query[:80],
+        sufficient=reply.sufficient,
+        cited=len(reply.cited),
+        ms=reply.timings_ms.get("total"),
+    )
+    return reply.to_dict()
+
+
 @app.get("/api/v1/index/stats", tags=["retrieve"])
 def index_stats() -> dict:
     """What is in the vector store, and which filter values it holds."""

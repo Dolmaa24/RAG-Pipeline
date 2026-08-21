@@ -76,6 +76,16 @@ class GraphRetriever:
         depth = min(hops or config.GRAPH_MAX_HOPS, config.GRAPH_MAX_HOPS)
         cap = limit or config.GRAPH_MAX_TRIPLES
 
+        # An empty graph is the normal state until someone asks for one, not a
+        # failure worth surfacing. Checking first keeps a Kuzu internal message
+        # out of the caller's warnings.
+        if self._store is None:
+            from pipeline.graph.store import graph_exists
+
+            if not graph_exists():
+                log.info("graph.traverse.no_graph")
+                return [], []
+
         found = list(seeds or [])
         if not found:
             found = self.entities.seeds(question)
