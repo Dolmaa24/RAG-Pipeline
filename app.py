@@ -16,17 +16,14 @@ from typing import Any, Optional
 
 from celery.result import AsyncResult
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-import shutil
-import uuid
-from pathlib import Path
 
 from celery_app import celery_app
 from config import config
 from database import CloudDatabase
 from observability import configure_logging, get_logger
 from pipeline.detect.router import Acquisition, pre_route
+from uploads import is_upload_url, save_upload, upload_id
 from urls import canonicalize, is_http_url
 
 configure_logging(config.LOG_LEVEL, config.LOG_FORMAT)
@@ -44,18 +41,25 @@ app = FastAPI(
 
 db = CloudDatabase()
 
-UPLOAD_DIR = Path("output/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.post("/api/v1/upload", tags=["extract"])
-def upload_file(file: UploadFile = File(...)):
-    ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "bin"
-    file_id = f"{uuid.uuid4().hex}.{ext}"
-    dest = UPLOAD_DIR / file_id
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    return {"url": f"http://127.0.0.1:8000/uploads/{file_id}"}
+def upload_file(file: UploadFile = File(...)) -> dict:
+    """Store a file and return the URL that names it.
+
+    The URL uses the ``upload://`` scheme and is read from disk by whichever
+    worker picks the job up — the file is never served over HTTP. Pass it to
+    ``/api/v1/extract`` exactly as you would pass a web URL.
+
+    The directory is deliberately not mounted for browsing: uploads are
+    whatever the user gave us, and this API has no authentication.
+    """
+    try:
+        url = save_upload(file.file, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+    log.info("upload.stored", filename=file.filename, url=url)
+    return {"url": url}
 
 
 # --------------------------------------------------------------------------- #
@@ -116,10 +120,21 @@ class ExtractionRequest(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def _must_be_http(cls, value: str) -> str:
-        if not is_http_url(value.strip()):
-            raise ValueError("url must start with http:// or https://")
-        return value.strip()
+    def _must_be_fetchable(cls, value: str) -> str:
+        value = value.strip()
+        if is_http_url(value):
+            return value
+        if not is_upload_url(value):
+            raise ValueError(
+                "url must start with http://, https://, or upload:// "
+                "(the reference returned by /api/v1/upload)"
+            )
+        # Validated here as well as in the fetch stage, so a malformed
+        # reference is a 422 the caller can read rather than a queued task
+        # that fails a minute later on a worker they are not watching.
+        if not upload_id(value):
+            raise ValueError("upload reference is malformed; use the url /api/v1/upload returned")
+        return value
 
     @field_validator("schema_template")
     @classmethod

@@ -21,6 +21,7 @@ page are all answers, not outages, and none of them is retried.
 
 from __future__ import annotations
 
+import mimetypes
 import random
 import re
 import time
@@ -41,6 +42,7 @@ from models import ExtractionItem, FetchMode, Stage
 from nettls import client_context, explain
 from observability import get_logger, metrics
 from pipeline.compliance import policy as default_policy
+from uploads import is_upload_url, resolve_upload
 from urls import canonicalize, host_of, is_http_url
 
 from .blocks import block_guidance, detect_block
@@ -131,6 +133,14 @@ class ResilientFetcher:
         started = time.perf_counter()
         item.canonical_url = canonicalize(item.url)
         try:
+            if is_upload_url(item.url):
+                # A file the user handed us is already on this machine. There
+                # is nothing to rate-limit, no robots.txt to consult and no
+                # host to trip a circuit breaker, so none of that applies.
+                self._apply(item, self._fetch_upload(item.url))
+                metrics.incr("fetch.ok")
+                return item
+
             if not is_http_url(item.url):
                 raise FetchError(f"{item.url!r} is not an http(s) URL")
 
@@ -165,6 +175,34 @@ class ResilientFetcher:
             return item.fail(Stage.FETCH, f"unexpected fetch error: {exc}", error_type=type(exc).__name__)
         finally:
             item.record_timing("fetch", time.perf_counter() - started)
+
+    # ------------------------------------------------------------------ #
+    # Local path: uploads
+    # ------------------------------------------------------------------ #
+
+    def _fetch_upload(self, url: str) -> FetchResult:
+        """Read an uploaded file from disk as though it had been fetched."""
+        try:
+            path = resolve_upload(url)
+        except (ValueError, FileNotFoundError) as exc:
+            raise FetchError(str(exc)) from exc
+
+        size = path.stat().st_size
+        if size > config.MAX_CONTENT_BYTES:
+            raise TooLarge(url, size, config.MAX_CONTENT_BYTES)
+
+        # A guess from the extension only. Detection proper runs on the bytes
+        # in the next stage and overrules this, which is what makes a .pdf
+        # that is really a ZIP land in the right handler anyway.
+        guessed, _ = mimetypes.guess_type(path.name)
+        return FetchResult(
+            status=200,
+            headers={"content-type": guessed or "application/octet-stream"},
+            body=path.read_bytes(),
+            final_url=url,
+            redirects=[],
+            mode=FetchMode.INLINE,
+        )
 
     # ------------------------------------------------------------------ #
     # Static path

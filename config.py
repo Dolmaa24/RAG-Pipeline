@@ -101,6 +101,11 @@ class EngineConfig(BaseSettings):
     MAX_ARCHIVE_MEMBERS: int = 200
     MAX_FEED_ENTRIES: int = 100
     MAX_SITEMAP_URLS: int = 5000
+    #: Where uploaded files are written. The API writes them and a worker in
+    #: another process reads them, so on a split deployment this must name a
+    #: volume both can see. Relative paths are resolved against the repo root,
+    #: not the working directory, so the two cannot disagree.
+    UPLOAD_DIR: str = "output/uploads"
     DOCUMENT_BACKEND: Literal["markitdown", "docling"] = "markitdown"
     OCR_ENABLED: bool = True
     #: Vision.framework needs no install and is fast on Apple Silicon;

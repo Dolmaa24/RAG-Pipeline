@@ -706,6 +706,7 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | Endpoint | Purpose |
 |---|---|
 | `POST /api/v1/extract` | Any URL. Routed to the right queue automatically. |
+| `POST /api/v1/upload` | Send a file instead of a URL; returns a reference to extract. |
 | `POST /api/v1/extract/batch` | Many URLs, one report. |
 | `POST /api/v1/crawl` | Walk a site; collect files or extract every page. |
 | `GET /api/v1/crawls/{id}` | Live counters, and the files found so far. |
@@ -723,6 +724,27 @@ Useful request options: `allowed_tiers` (e.g. `[1]` for structured data only,
 `[3]` to force the model), `local_only` (never send content to a hosted model),
 `force_dynamic` (browser rendering), `fan_out` (enqueue a feed's or sitemap's
 URLs as their own jobs).
+
+### Files, rather than URLs
+
+Upload the file, then extract the reference you get back — everything
+downstream treats it exactly like a URL:
+
+```bash
+curl -X POST localhost:8000/api/v1/upload -F 'file=@quarterly-report.pdf'
+# {"url": "upload://3f9a1c2ed4b1-quarterly-report.pdf"}
+```
+
+The file is written to `UPLOAD_DIR` and read from disk by whichever worker
+picks the job up. It is never fetched over HTTP and never served over HTTP:
+the pipeline refuses to fetch private addresses, which is exactly what its own
+API is, and uploads are whatever the user gave us — not something to expose on
+an API with no authentication. An `upload://` URL can only ever name a file
+inside that one directory, so it is not a way to read anything else on the
+host.
+
+On a split deployment, `UPLOAD_DIR` must be a volume the API and the workers
+both see.
 
 ## Schemas
 

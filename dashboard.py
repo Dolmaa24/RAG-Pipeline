@@ -29,6 +29,15 @@ def api_get(path: str, **params):
         return None
 
 
+def api_detail(exc: requests.HTTPError) -> str:
+    """The reason the API gave, rather than the generic status line."""
+    try:
+        detail = exc.response.json().get("detail", "")
+    except Exception:
+        detail = exc.response.text[:200]
+    return f"{exc.response.status_code}: {detail}"
+
+
 def api_post(path: str, payload: dict, timeout: int = 120):
     """POST and return the body, or None with the reason already surfaced."""
     try:
@@ -36,12 +45,7 @@ def api_post(path: str, payload: dict, timeout: int = 120):
         response.raise_for_status()
         return response.json()
     except requests.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.response.json().get("detail", "")
-        except Exception:
-            detail = exc.response.text[:200]
-        st.error(f"{exc.response.status_code}: {detail}")
+        st.error(api_detail(exc))
         return None
     except requests.RequestException as exc:
         st.error(f"API unreachable at {API} ({exc})")
@@ -134,10 +138,17 @@ with right:
         if uploaded_file is not None:
             with st.spinner("Uploading file..."):
                 try:
-                    response = requests.post(f"{API}/api/v1/upload", files={"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}, timeout=30)
+                    response = requests.post(
+                        f"{API}/api/v1/upload",
+                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)},
+                        timeout=30,
+                    )
                     response.raise_for_status()
                     target_url = response.json().get("url")
-                except Exception as exc:
+                except requests.HTTPError as exc:
+                    st.error(f"Failed to upload file: {api_detail(exc)}")
+                    st.stop()
+                except requests.RequestException as exc:
                     st.error(f"Failed to upload file: {exc}")
                     st.stop()
         elif url:
@@ -145,6 +156,12 @@ with right:
         else:
             st.warning("Please upload a file or enter a URL.")
             st.stop()
+
+        # A crawl walks links between pages. An uploaded file has no site to
+        # walk, so the depth setting is simply not applicable to it.
+        if crawl_depth > 0 and uploaded_file is not None:
+            st.caption("Crawl depth does not apply to an uploaded file — extracting it on its own.")
+            crawl_depth = 0
 
         if crawl_depth > 0:
             # Run Crawl

@@ -22,7 +22,8 @@ from typing import Optional
 
 from models import ExtractionItem, ResourceKind
 from observability import get_logger
-from urls import registrable_host
+from uploads import is_upload_url
+from urls import is_http_url, registrable_host
 
 from .magic import Detection, detect
 
@@ -71,6 +72,11 @@ class PreRoute:
 
 def pre_route(url: str) -> PreRoute:
     """Decide how to acquire ``url``, from the URL alone."""
+    if is_upload_url(url):
+        # An uploaded file is read from disk. Naming it is not an invitation to
+        # run the media downloader over it, whatever the filename looks like.
+        return PreRoute(Acquisition.HTTP, "uploaded file, read from disk")
+
     parsed = urllib.parse.urlparse(url.strip())
     host = registrable_host(parsed.netloc.lower())
     path = parsed.path.lower()
@@ -144,6 +150,9 @@ class URLRouter:
         decision = pre_route(url)
         if decision.acquisition in (Acquisition.YTDLP, Acquisition.LIVESTREAM):
             return "media"
+
+        if not is_http_url(url):
+            return "web"  # nothing to ask a server about
 
         # Last resort: ask the server what it is holding, without downloading it.
         try:
