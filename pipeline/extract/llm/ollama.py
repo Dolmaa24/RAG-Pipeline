@@ -20,7 +20,7 @@ from config import config
 from errors import ExtractError, SchemaViolation, TransientExtractError
 from observability import get_logger
 
-from .base import LLMResponse, build_prompt, extract_json_object
+from .base import LLMResponse, Message, ToolRequest, ToolTurn, build_prompt, extract_json_object
 
 log = get_logger("llm.ollama")
 
@@ -140,6 +140,95 @@ class OllamaBackend:
         raise SchemaViolation("; ".join(problems[:5]))  # pragma: no cover - loop always returns
 
     # ------------------------------------------------------------------ #
+    # Tool calling
+    #
+    # A different endpoint, not a different option. /api/generate takes a
+    # single prompt string and has nowhere to put a tool result, so there is no
+    # way to continue a conversation on it. /api/chat takes a message list and
+    # a tools array, which is the whole primitive.
+    # ------------------------------------------------------------------ #
+
+    def supports_tools(self) -> bool:
+        """Whether the pulled model advertises tool support.
+
+        Asked of Ollama rather than guessed from the name: the same family ships
+        variants that differ, and a wrong guess here shows up as a model that
+        silently describes a tool call in prose instead of making one.
+        """
+        try:
+            response = httpx.post(
+                f"{self.host}/api/show", json={"model": self.model}, timeout=5.0
+            )
+            if response.status_code != 200:
+                return False
+            payload = response.json()
+        except httpx.HTTPError:
+            return False
+
+        capabilities = payload.get("capabilities") or []
+        if capabilities:
+            return "tools" in capabilities
+        # Older Ollama has no capabilities field. The template is the next best
+        # evidence: a model wired for tools mentions them in its chat template.
+        return ".Tools" in (payload.get("template") or "")
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict],
+        tool_choice: str = "auto",
+    ) -> ToolTurn:
+        body = {
+            "model": self.model,
+            "messages": [_wire(message) for message in messages],
+            "stream": False,
+            "keep_alive": config.OLLAMA_KEEP_ALIVE,
+            "options": {
+                "temperature": 0.0,  # choosing a tool is not a creative task
+                "num_predict": config.OLLAMA_NUM_PREDICT,
+                "num_ctx": config.OLLAMA_NUM_CTX,
+            },
+        }
+        if tools:
+            body["tools"] = [_as_ollama_tool(tool) for tool in tools]
+
+        started = time.perf_counter()
+        payload = self._post("/api/chat", body)
+        elapsed = time.perf_counter() - started
+
+        message = payload.get("message") or {}
+        calls = [
+            ToolRequest(
+                name=(call.get("function") or {}).get("name", ""),
+                arguments=_arguments_of(call),
+            )
+            for call in (message.get("tool_calls") or [])
+        ]
+
+        turn = ToolTurn(
+            calls=calls,
+            # Dropped when calls are present: a turn is one or the other, and
+            # models routinely narrate a call they are also making.
+            text="" if calls else (message.get("content") or "").strip(),
+            backend=self.name,
+            model=self.model,
+            prompt_tokens=payload.get("prompt_eval_count"),
+            completion_tokens=payload.get("eval_count"),
+            latency_seconds=elapsed,
+            finish_reason=str(payload.get("done_reason") or ""),
+        )
+        log.info(
+            "llm.tool_turn",
+            backend=self.name,
+            model=self.model,
+            seconds=round(elapsed, 1),
+            calls=[call.name for call in calls],
+            tokens=payload.get("eval_count"),
+        )
+        return turn
+
+    # ------------------------------------------------------------------ #
 
     def _call(self, full_prompt: str, json_schema: dict) -> dict:
         body = {
@@ -164,8 +253,12 @@ class OllamaBackend:
                 "num_ctx": config.OLLAMA_NUM_CTX,
             },
         }
+        return self._post("/api/generate", body)
+
+    def _post(self, path: str, body: dict) -> dict:
+        """One request to Ollama, with its failures named rather than raw."""
         try:
-            response = httpx.post(f"{self.host}/api/generate", json=body, timeout=self.timeout)
+            response = httpx.post(f"{self.host}{path}", json=body, timeout=self.timeout)
         except httpx.ConnectError as exc:
             raise TransientExtractError(
                 f"cannot reach Ollama at {self.host}. Is `ollama serve` running? ({exc})"
@@ -187,6 +280,50 @@ class OllamaBackend:
                 f"Ollama returned {response.status_code}: {response.text[:200]}", model=self.model
             )
         return response.json()
+
+
+def _wire(message: Message) -> dict:
+    """One message in Ollama's chat shape.
+
+    Ollama identifies a tool result by the tool's *name*; it issues no call id
+    and ignores one if sent. Groq correlates by id instead. The neutral Message
+    carries both so a history survives a failover between them.
+    """
+    wire: dict = {"role": message.role, "content": message.content}
+    if message.tool_calls:
+        wire["tool_calls"] = [
+            {"function": {"name": call.name, "arguments": call.arguments}}
+            for call in message.tool_calls
+        ]
+    if message.role == "tool" and message.tool_name:
+        wire["tool_name"] = message.tool_name
+    return wire
+
+
+def _as_ollama_tool(tool: dict) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _arguments_of(call: dict) -> dict:
+    """Arguments as a dict, whichever way this build of Ollama sent them."""
+    raw = (call.get("function") or {}).get("arguments", {})
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        # Malformed arguments are the model's mistake to see and correct, so
+        # they are handed on rather than raised: validation downstream will
+        # explain the problem in terms it can act on.
+        return {"__unparseable__": str(raw)}
+    return parsed if isinstance(parsed, dict) else {"__unparseable__": str(raw)}
 
 
 __all__ = ["OllamaBackend"]

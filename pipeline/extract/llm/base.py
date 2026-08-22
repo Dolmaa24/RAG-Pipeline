@@ -67,6 +67,98 @@ class LLMResponse:
     warnings: list[str] = field(default_factory=list)
 
 
+# --------------------------------------------------------------------------- #
+# Tool calling
+#
+# complete_json() answers one question and forgets it: content in, shape out.
+# An agent needs the other thing — "call this, then let me see what it
+# returned" — which means a conversation with a history, and a turn that is
+# either tool calls or an answer.
+#
+# The tool descriptions are passed as plain dicts, not as the registry's
+# ToolSpec. This layer must not import pipeline.agents: the agents are built on
+# the model layer, and an import the other way would make the two circular and
+# the model layer untestable on its own.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class ToolRequest:
+    """One tool the model asked for, with the arguments it chose."""
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    #: Present on APIs that correlate results back to calls (Groq/OpenAI).
+    #: Ollama does not issue one, and the empty string is the honest value.
+    call_id: str = ""
+
+
+@dataclass(slots=True)
+class Message:
+    """One turn of the conversation, in a form both wire formats can render.
+
+    Kept neutral rather than storing each backend's own dict, because a history
+    built against one backend would otherwise be unusable if the run failed
+    over to the other — which is exactly when it matters.
+    """
+
+    role: str  # system | user | assistant | tool
+    content: str = ""
+    tool_calls: list[ToolRequest] = field(default_factory=list)
+    #: For role="tool": which call this answers.
+    tool_call_id: str = ""
+    tool_name: str = ""
+
+    @classmethod
+    def system(cls, content: str) -> "Message":
+        return cls(role="system", content=content)
+
+    @classmethod
+    def user(cls, content: str) -> "Message":
+        return cls(role="user", content=content)
+
+    @classmethod
+    def observation(cls, request: "ToolRequest", content: str) -> "Message":
+        """What a tool returned, addressed to the call that asked for it."""
+        return cls(
+            role="tool",
+            content=content,
+            tool_call_id=request.call_id,
+            tool_name=request.name,
+        )
+
+
+@dataclass(slots=True)
+class ToolTurn:
+    """One model turn: either tool calls to run, or final text. Never both.
+
+    A model that emits both is answering and asking at once, and acting on
+    either half is a guess. The backends drop the text when calls are present,
+    which is what every tool-calling API means by it anyway.
+    """
+
+    calls: list[ToolRequest] = field(default_factory=list)
+    text: str = ""
+    backend: str = ""
+    model: str = ""
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    latency_seconds: float = 0.0
+    #: False when the shim parsed a JSON object instead of the model emitting
+    #: real tool calls. Worth recording: a trace that cannot tell those apart
+    #: cannot explain why one model behaves worse than another.
+    native: bool = True
+    finish_reason: str = ""
+
+    @property
+    def wants_tools(self) -> bool:
+        return bool(self.calls)
+
+    def as_message(self) -> Message:
+        """This turn, ready to append to the history it came from."""
+        return Message(role="assistant", content=self.text, tool_calls=list(self.calls))
+
+
 class LLMBackend(Protocol):
     name: str
     model: str
@@ -84,6 +176,24 @@ class LLMBackend(Protocol):
         json_schema: dict,
     ) -> LLMResponse:
         """Return a JSON object for this content. Raises on failure."""
+        ...
+
+    def supports_tools(self) -> bool:
+        """Whether this backend can be given tools natively. Must not raise."""
+        ...
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict],
+        tool_choice: str = "auto",
+    ) -> ToolTurn:
+        """One turn: tool calls to run, or the final text. Raises on failure.
+
+        ``tools`` are dicts of ``{name, description, input_schema}`` — the shape
+        :meth:`pipeline.agents.tools.registry.ToolSpec.describe` already returns.
+        """
         ...
 
 

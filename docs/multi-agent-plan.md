@@ -324,7 +324,7 @@ constraint and should stay that way.
 
 *Reproduce:* `PYTHONPATH=. ./venv/bin/python -m bench.tool_calling --repeat 3`
 
-## Phase 02 — Tool calling in the model layer (~3 days)
+## Phase 02 — Tool calling in the model layer ✅ shipped
 
 The real code change. Extend the `LLMBackend` protocol with a second method:
 
@@ -339,8 +339,10 @@ def complete_with_tools(
 ```
 
 - **Ollama** moves from `/api/generate` to `/api/chat` with a `tools` array.
-  `qwen2.5:3b` supports this; `keep_alive` and the existing cache carry over
-  unchanged.
+  Whether a model supports it is asked of `/api/show` rather than guessed from
+  the name: the same family ships variants that differ, and a wrong guess shows
+  up as a model quietly describing a tool call in prose instead of making one.
+  `keep_alive` and the existing cache carry over unchanged.
 - **Groq** gets native tool calling, which is materially better at it and is the
   right home for the supervisor role.
 - **A fallback shim** for models that cannot tool-call at all: a constrained
@@ -358,6 +360,54 @@ the number, not the hope, decide whether the supervisor runs locally.
 
 **Ships:** both backends tool-calling behind one interface, the fallback shim, and
 a scored benchmark table per model.
+
+### As built
+
+`ToolTurn`, `ToolRequest` and a neutral `Message` in `base.py`; `/api/chat` on
+Ollama; native tool calling on Groq; `toolshim.py` for everything else; and an
+`AGENT` role beside `INTERACTIVE` and `BULK`.
+
+**The role needed its own *model*, not just its own backend.** The plan expected
+the agent to differ from extraction by provider. The gate said it differs by
+model on the same provider: `qwen2.5:3b` extracts better, `llama3.2:3b` drives a
+loop better. So `AGENT_MODEL_NAME` sits beside `LLM_AGENT_BACKEND`, defaulting
+to the model the benchmark chose, and falls back to the extraction model with a
+warning naming the `ollama pull` command when it is not present — the same
+principle as an unavailable interactive backend making search slower rather than
+broken.
+
+**The two APIs disagree about how a tool result is addressed.** Ollama matches a
+result to a call by the tool's *name* and issues no id; Groq correlates by a
+call *id* it generated. A history built on one and sent to the other is not
+rejected — the model just sees results attached to nothing. So `Message` carries
+both and each backend renders its own, and the Groq renderer invents an id when
+a history that began on Ollama has none. Failover between providers mid-run is
+otherwise silently wrong, which is the worst kind.
+
+**Ollama stringifies argument values.** A turn came back with
+`{"limit": "1000", "use_graph": "null"}` — strings where the schema says integer
+and boolean. Pydantic coerces the numeric one and rejects `"null"`, which
+becomes an observation the model can read and correct. Left as-is deliberately:
+normalising it here would hide a model error the registry is built to explain.
+
+**The shim's rendering mattered more than its parsing.** The first version
+listed each tool as a signature — `search_corpus(doc_type?, department?,
+author?, …, query, limit?)` with the description underneath — and against it
+`qwen2.5:3b` replied that the tools "do not include a function to answer
+questions about quarterly revenue" while looking directly at `search_corpus`.
+Nine optional filters ahead of the one required argument buried the only part
+that says what a tool is for. Name and description first, arguments after, and
+both models then chose correctly. The same lesson as the gate: with a small
+model, description is the signal and everything else is noise competing with it.
+
+Two bugs in the shim's own schema, both the same shape: `arguments` and `answer`
+were non-nullable, so every turn that used one half failed validation on the
+other and paid a retry to say the same thing again. A model writing `null` for
+the half it is not using is correct, and the schema now says so.
+
+**Not verified against the live Groq API.** There is no key on this machine, so
+the Groq path is covered by wire-format tests and nothing else. The first run
+with a real key should be treated as untested code.
 
 ## Phase 03 — The loop, and its budget (~3 days, LangGraph)
 

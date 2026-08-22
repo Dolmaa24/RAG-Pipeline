@@ -46,6 +46,9 @@ _lock = threading.Lock()
 #: Calls a user is waiting on, as opposed to ingest work nobody is waiting on.
 INTERACTIVE = "interactive"
 BULK = "bulk"
+#: A loop choosing tools. Its own role because the job is different enough that
+#: the best model for it is a different model — measured, not assumed.
+AGENT = "agent"
 
 
 def get_backend(
@@ -105,7 +108,46 @@ def _configured(role: str) -> str:
     """Which backend setting governs this role."""
     if role == INTERACTIVE and config.LLM_INTERACTIVE_BACKEND:
         return config.LLM_INTERACTIVE_BACKEND
+    if role == AGENT and config.LLM_AGENT_BACKEND:
+        return config.LLM_AGENT_BACKEND
     return config.LLM_BACKEND
+
+
+def get_agent_backend(*, local_only: bool = False):
+    """A backend ready to be given tools, for the loop.
+
+    Two things happen here that :func:`get_backend` does not do.
+
+    The **model** differs from extraction's. Picking a tool and extracting a
+    schema are different jobs, and the benchmark says different models win them:
+    ``qwen2.5:3b`` extracts better and never stops calling tools, which makes it
+    unusable as a supervisor. A configured agent model that is not pulled falls
+    back to the extraction model with a warning rather than failing — the same
+    principle as an unavailable interactive preference making search slower
+    instead of broken.
+
+    And a backend that cannot tool-call is **wrapped rather than rejected**, so
+    the loop runs on every model in the stack, well on some and poorly on
+    others, rather than only on the ones with a tools array.
+    """
+    from .toolshim import shim_if_needed
+
+    backend = get_backend(local_only=local_only, role=AGENT)
+
+    wanted = config.AGENT_MODEL_NAME
+    if wanted and backend.name == "ollama" and backend.model != wanted:
+        candidate = OllamaBackend(model=wanted)
+        if candidate.available():
+            backend = candidate
+        else:
+            log.warning(
+                "llm.agent_model_missing",
+                wanted=wanted,
+                using=backend.model,
+                hint=f"ollama pull {wanted}",
+            )
+
+    return shim_if_needed(backend)
 
 
 def _build(choice: str) -> LLMBackend:
@@ -156,6 +198,7 @@ def status() -> dict:
 
 
 __all__ = [
+    "AGENT",
     "BULK",
     "GroqBackend",
     "INTERACTIVE",
@@ -164,6 +207,7 @@ __all__ = [
     "OllamaBackend",
     "build_prompt",
     "extract_json_object",
+    "get_agent_backend",
     "get_backend",
     "reset",
     "status",

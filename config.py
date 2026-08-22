@@ -160,6 +160,18 @@ class EngineConfig(BaseSettings):
     #: 11/11), which is the right trade: a reversed edge is a confidently wrong
     #: fact, a missing entity is only an absent one.
     AI_MODEL_NAME: str = "qwen2.5:3b"
+    #: The model that drives an agent loop, which is a different job from
+    #: extraction and measured separately — see bench/tool_calling.py. Both 3B
+    #: models pick the right tool ~92% of the time, but qwen2.5:3b stopped 0
+    #: times out of 6 when no tool was needed, so it exhausts an iteration
+    #: budget on every run and cannot lead a loop. llama3.2:3b stopped every
+    #: time and carried arguments across turns correctly.
+    #: Falls back to AI_MODEL_NAME, with a warning, when it is not pulled.
+    AGENT_MODEL_NAME: str = "llama3.2:3b"
+    #: Which backend the agent loop uses, separate from extraction: the loop can
+    #: run hosted while page content stays local. None means "same as
+    #: LLM_BACKEND".
+    LLM_AGENT_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
     AI_TIMEOUT: float = 300.0
     #: How long Ollama keeps the model resident after a call. Its own default is
     #: 5 minutes, so an intermittent pipeline pays a measured ~2.2s reload on

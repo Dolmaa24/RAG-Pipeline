@@ -21,7 +21,7 @@ from config import config
 from errors import ExtractError, TransientExtractError
 from observability import get_logger
 
-from .base import LLMResponse, build_prompt, extract_json_object
+from .base import LLMResponse, Message, ToolRequest, ToolTurn, build_prompt, extract_json_object
 
 log = get_logger("llm.groq")
 
@@ -80,6 +80,76 @@ class GroqBackend:
             temperature=0.0,
             max_tokens=8192,
         )
+
+    # ------------------------------------------------------------------ #
+    # Tool calling
+    # ------------------------------------------------------------------ #
+
+    def supports_tools(self) -> bool:
+        """Every model Groq serves through this API accepts a tools array.
+
+        Unlike ``json_schema``, which is per-model and moves, tool calling is a
+        property of the chat API here. So this reports reachability, and a model
+        that turns out not to comply fails as an ordinary API error rather than
+        being guessed about in advance.
+        """
+        return self.available()
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict],
+        tool_choice: str = "auto",
+    ) -> ToolTurn:
+        if config.LOCAL_ONLY:
+            raise ExtractError("LOCAL_ONLY is set; refusing to send content to a hosted model")
+
+        client = self._get_client()
+        started = time.perf_counter()
+        try:
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[_wire(message) for message in messages],
+                tools=[_as_groq_tool(tool) for tool in tools] or None,
+                tool_choice=tool_choice if tools else None,
+                temperature=0.0,
+                max_tokens=4096,
+            )
+        except Exception as exc:
+            raise self._classify(exc) from exc
+
+        elapsed = time.perf_counter() - started
+        choice = completion.choices[0]
+        calls = [
+            ToolRequest(
+                name=call.function.name,
+                arguments=_parse_arguments(call.function.arguments),
+                call_id=call.id or "",
+            )
+            for call in (choice.message.tool_calls or [])
+        ]
+
+        usage = getattr(completion, "usage", None)
+        turn = ToolTurn(
+            calls=calls,
+            text="" if calls else (choice.message.content or "").strip(),
+            backend=self.name,
+            model=self.model,
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            latency_seconds=elapsed,
+            finish_reason=str(choice.finish_reason or ""),
+        )
+        log.info(
+            "llm.tool_turn",
+            backend=self.name,
+            model=self.model,
+            seconds=round(elapsed, 2),
+            calls=[call.name for call in calls],
+            tokens=getattr(usage, "completion_tokens", None),
+        )
+        return turn
 
     @staticmethod
     def _is_schema_unsupported(exc: Exception) -> bool:
@@ -212,6 +282,58 @@ class GroqBackend:
         if status in (401, 403):
             return ExtractError("Groq rejected the API key; check GROQ_API_KEY")
         return ExtractError(f"Groq call failed: {message[:300]}")
+
+
+def _wire(message: Message) -> dict:
+    """One message in the OpenAI-compatible shape Groq expects.
+
+    A tool result is correlated by ``tool_call_id`` here, where Ollama uses the
+    tool's name. Both live on the neutral Message, so the same history renders
+    correctly whichever backend the run ends up on.
+    """
+    if message.role == "tool":
+        return {
+            "role": "tool",
+            "tool_call_id": message.tool_call_id,
+            "content": message.content,
+        }
+
+    wire: dict = {"role": message.role, "content": message.content}
+    if message.tool_calls:
+        wire["tool_calls"] = [
+            {
+                "id": call.call_id or f"call_{index}",
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments),
+                },
+            }
+            for index, call in enumerate(message.tool_calls)
+        ]
+    return wire
+
+
+def _as_groq_tool(tool: dict) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _parse_arguments(raw: object) -> dict:
+    """Arguments as a dict. This API sends them as a JSON string."""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {"__unparseable__": str(raw)}
+    return parsed if isinstance(parsed, dict) else {"__unparseable__": str(raw)}
 
 
 __all__ = ["GroqBackend"]
