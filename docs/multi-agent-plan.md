@@ -676,15 +676,56 @@ both, against roughly 12s + 1s sequentially, because they contend for the same
 embedder and the same disk. Parallelism helps when the legs are independent, and
 these are not as independent as they look.
 
-### The one thing that did not get fixed
+### The graph latency, fixed — and not where it was said to be
 
-`graph_neighbors` is still ~13s per call, and it is now the largest single cost
-in an investigation. Kuzu opens and the entity index loads on every invocation,
-which is deliberate — Kuzu's lock is process-wide, and a cached read handle in
-the agents worker would block the ingest worker from ever writing. Fixing it
-properly means either a read-only replica of the graph, or moving graph queries
-behind the API process that already holds a handle. Both are real work and
-neither belongs in a surfaces phase.
+Three phases of notes here blamed Kuzu, on the reasoning that the store opens
+per call. Measured, that was wrong:
+
+```
+graph_exists()          0.00s
+EntityIndex()           1.08s
+.seeds()               10.60s     <- all of it
+GraphStore open         0.05s
+.neighbours()           0.03s
+```
+
+Kuzu is 0.08s of a 13-second call. The cost is `EntityIndex.seeds`, which
+embeds the query to find entities by meaning, and embedding one short string
+loads BGE the first time it happens.
+
+**An exact name does not need a model.** When a caller already knows the
+entity's real name — the usual case for a graph tool, since the name came out of
+a previous traversal — a scalar lookup answers it. Asked for "Acme
+Corporation": 10.6s to 0.11s, and *more precise*, because the vector search had
+been returning `['ACME', 'Acme Corporation', 'Beta Industries']` and seeding a
+traversal from a company that merely appears nearby. Partial names and real
+questions still go to the model; the fast path is an addition, not a
+replacement.
+
+**What remains is a cold start, not a per-call cost.** The embedder is a
+process-wide singleton, so one run per worker pays for it — always the first one
+someone is watching. The agents worker now loads it on a daemon thread from
+`worker_ready`.
+
+That last part contradicts a comment in `celery_app.py` saying the embedder is
+deliberately *not* preloaded, and the comment is still right: billiard gives a
+forked child four seconds to report UP and kills it otherwise, which turned a
+six-second preload into a loop of dying children. None of that reaches here.
+`worker_ready` fires after the worker has already reported itself, the agents
+queue runs on the threads pool so nothing is forked, and a daemon thread delays
+no task. The worst case is the behaviour we already had.
+
+```
+                        before        after
+graph_neighbors        13151ms       1755ms
+search_corpus          13150ms       6217ms
+whole investigation      36.8s        29.3s
+```
+
+`graph_neighbors` does not reach the 0.11s measured in isolation because the
+model emits both calls in one turn and they run concurrently, contending for the
+same disk. That is phase 03's parallel dispatch, and 1.7s is what it costs to
+have both back at once rather than one after the other.
 
 ---
 

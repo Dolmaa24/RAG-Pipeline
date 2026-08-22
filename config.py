@@ -195,6 +195,10 @@ class EngineConfig(BaseSettings):
     #: short, not a strategy.
     AGENT_NETWORK_CALLS: int = 4
     AGENT_WRITE_CALLS: int = 2
+    #: Load the embedder when the agents worker starts, on a background thread,
+    #: so the first investigation does not pay 10s for it. Safe here where the
+    #: same preload is not safe on the cpu worker — see celery_app.py.
+    AGENT_WARM_EMBEDDER: bool = True
     AI_TIMEOUT: float = 300.0
     #: How long Ollama keeps the model resident after a call. Its own default is
     #: 5 minutes, so an intermittent pipeline pays a measured ~2.2s reload on

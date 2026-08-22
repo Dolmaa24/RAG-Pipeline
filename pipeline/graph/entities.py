@@ -21,6 +21,7 @@ from errors import MissingDependency
 from observability import get_logger, metrics
 
 from pipeline.graph.schema import Entity
+from pipeline.retrieve.filters import quote_literal
 
 log = get_logger("graph.entities")
 
@@ -124,18 +125,59 @@ class EntityIndex:
         return len(rows)
 
     def seeds(self, query: str, *, top_k: Optional[int] = None) -> list[str]:
-        """Entity names this question is probably about."""
+        """Entity names this question is probably about.
+
+        Tries an exact name match before reaching for the embedder. That is not
+        only an optimisation: when the caller already has the entity's real
+        name — which is the usual case for a graph tool, because the name came
+        out of a previous traversal — an exact match is *more* precise than
+        nearest-neighbour. Asked for "Acme Corporation", the vector search here
+        returned ``['ACME', 'Acme Corporation', 'Beta Industries']``, seeding a
+        traversal from a company that merely appears nearby.
+
+        The saving is the whole cost. Embedding one short string loads BGE on
+        first use, measured at 10.6s against 0.03s for the Kuzu query it feeds —
+        so an exact match answers in milliseconds where the semantic path pays
+        for a model the process may not otherwise need at all.
+        """
         table = self.table
         if table is None or not query.strip():
             return []
 
         limit = top_k or config.GRAPH_SEED_ENTITIES
+
+        exact = self._exact(table, query, limit)
+        if exact:
+            metrics.incr("graph.entities.exact_hit")
+            return exact
+
         try:
             vector = self.embedder.embed_query(query)
             with metrics.timer("graph.entities.search"):
                 rows = table.search(vector, vector_column_name="vector").limit(limit).to_list()
         except Exception as exc:
             log.warning("graph.entities.search_failed", error=repr(exc))
+            return []
+        metrics.incr("graph.entities.semantic_hit")
+        return [str(row["name"]) for row in rows if row.get("name")]
+
+    def _exact(self, table, query: str, limit: int) -> list[str]:
+        """Names equal to ``query``, ignoring case. Empty when there are none.
+
+        A failure here is not worth reporting: the semantic path runs next and
+        answers the same question, more slowly.
+        """
+        wanted = query.strip()
+        try:
+            rows = (
+                table.search()
+                .where(f"LOWER(name) = {quote_literal(wanted.lower())}")
+                .select(["name"])
+                .limit(limit)
+                .to_list()
+            )
+        except Exception as exc:
+            log.debug("graph.entities.exact_failed", error=repr(exc))
             return []
         return [str(row["name"]) for row in rows if row.get("name")]
 

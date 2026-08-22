@@ -21,6 +21,8 @@ where forgetting it costs an afternoon of confusing hangs.
 from __future__ import annotations
 
 import os
+import threading
+import time
 import resource
 
 # Must be set before the prefork pool forks. Importing this module is the
@@ -123,6 +125,47 @@ def _on_worker_ready(sender=None, **_kwargs) -> None:
     configure_logging(config.LOG_LEVEL, config.LOG_FORMAT)
     queues = sorted(queue.name for queue in (sender.app.amqp.queues.values() if sender else []))
     log.info("worker.ready", hostname=getattr(sender, "hostname", "?"), queues=queues)
+
+    if config.AGENTS_QUEUE in queues:
+        _warm_agents_worker()
+
+
+def _warm_agents_worker() -> None:
+    """Load the embedder in the background, so no investigation pays for it.
+
+    An investigation's first graph or search call embeds a string, and loading
+    BGE for it was measured at 10.6 seconds against 0.03 for the Kuzu query it
+    feeds. The model is a process-wide singleton, so exactly one run per worker
+    pays that — and it is always the first one someone is watching.
+
+    Note the comment in :func:`_on_process_init` explaining why the embedder is
+    *not* preloaded there. That reasoning does not reach here, for three
+    separate reasons, and each one matters:
+
+    * ``worker_ready`` fires after the worker is up and has already reported
+      itself. There is no billiard UP-message deadline left to miss.
+    * The agents queue runs on the threads pool. Nothing is forked, so neither
+      the four-second child handshake nor macOS's refusal to let Metal survive
+      ``fork()`` applies.
+    * It runs on a daemon thread, so a slow or failing load delays no task and
+      blocks no shutdown. The worst case is the behaviour we already have.
+    """
+    if not config.AGENT_WARM_EMBEDDER:
+        return
+
+    def warm() -> None:
+        started = time.perf_counter()
+        try:
+            from pipeline.embed.dense import get_dense_embedder
+
+            get_dense_embedder().embed_query("warm")
+        except Exception as exc:
+            # An investigation loads it on demand instead. Slower, not broken.
+            log.warning("worker.warm_failed", error=repr(exc))
+            return
+        log.info("worker.warmed", seconds=round(time.perf_counter() - started, 1))
+
+    threading.Thread(target=warm, name="warm-embedder", daemon=True).start()
 
 
 @worker_process_init.connect
