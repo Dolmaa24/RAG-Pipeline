@@ -606,9 +606,16 @@ with investigate_tab:
                 flagged = len(check.get("unsupported") or [])
                 if flagged:
                     st.caption(
-                        f"{flagged} of {check['checked']} sentences are not "
-                        "supported by the passages, and are marked [unsupported]."
+                        f"{flagged} of {check['checked']} claims are marked "
+                        "[unsupported] — the cited passages did not clearly "
+                        "carry them."
                     )
+                    # The rate is stated with the flags, not buried in docs. A
+                    # reader who finds one correct sentence in two marked stops
+                    # reading the marks, which costs the real catches their
+                    # value.
+                    if check.get("caveat"):
+                        st.caption(f":grey[{check['caveat']}]")
                 else:
                     st.caption(
                         f"All {check['checked']} sentences are supported by the "

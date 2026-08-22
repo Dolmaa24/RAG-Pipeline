@@ -95,10 +95,19 @@ def retrieve(
     rerank_results: Optional[bool] = None,
     rewrite: Optional[bool] = None,
     local_only: bool = False,
+    extra_queries: Optional[list[str]] = None,
     retriever=None,
     graph=None,
 ) -> RetrievalResult:
-    """Find the evidence for one question."""
+    """Find the evidence for one question.
+
+    ``extra_queries`` are retrieved for alongside the question and fused with
+    it, rather than appended to it. The distinction is not academic: an agent
+    that has discovered relevant names wants documents containing them *and*
+    the answer to what was originally asked, and pasting the names into the
+    question buys the first by diluting the second. Measured, that trade cost
+    as many answers as it won.
+    """
     started = time.perf_counter()
     result = RetrievalResult(query=query)
 
@@ -126,6 +135,17 @@ def retrieve(
     result.timings_ms["understand"] = round((time.perf_counter() - stage) * 1000, 2)
 
     queries = plan.queries()
+    if extra_queries:
+        # Appended after the plan's own, so the question stays the first leg
+        # and keeps its rank-fusion advantage. Deduplicated against what is
+        # already there — a lead that merely restates the question is not a
+        # second search.
+        seen = {q.strip().lower() for q in queries}
+        for extra in extra_queries:
+            key = (extra or "").strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                queries.append(extra.strip())
 
     # --- retrieve, both legs at once ------------------------------------ #
     stage = time.perf_counter()

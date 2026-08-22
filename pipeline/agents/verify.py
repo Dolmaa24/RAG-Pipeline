@@ -79,6 +79,19 @@ Return the numbers of the sentences that ARE supported. List every one of them.
 """
 
 
+#: What the check is worth, in the words a reader needs to act on it. Measured
+#: by bench/verify.py against the local model: it catches most fabrications and
+#: rejects roughly one supported sentence in three, almost always a paraphrase.
+#: Stating that alongside the flags is the difference between a reader
+#: discounting a flag and a reader discounting all of them.
+LOCAL_CAVEAT = (
+    "Advisory. The local checker catches about 85% of unsupported claims and "
+    "wrongly flags about a third of supported ones, usually when the answer "
+    "restates a passage in different words. Read a flag as 'worth checking', "
+    "not as 'wrong'."
+)
+
+
 @dataclass(slots=True)
 class Verdict:
     """What survived the check, and what did not."""
@@ -88,6 +101,9 @@ class Verdict:
     checked: int = 0
     note: str = ""
     seconds: float = 0.0
+    #: How far to trust the flags. Empty when nothing was flagged, since a
+    #: caveat on a clean result is noise.
+    caveat: str = ""
     #: True when the check could not run at all. Distinguished from "everything
     #: was supported", because those must not look the same to a caller.
     skipped: bool = False
@@ -103,6 +119,7 @@ class Verdict:
             "unsupported": self.unsupported,
             "clean": self.clean,
             "skipped": self.skipped,
+            "caveat": self.caveat,
             "reason": self.reason,
             "note": self.note,
             "seconds": round(self.seconds, 2),
@@ -169,15 +186,15 @@ def verify(
         )
 
     if backend is None:
-        from pipeline.extract.llm import INTERACTIVE, get_backend
+        from pipeline.extract.llm import VERIFY, get_backend
 
-        # Deliberately the extraction model, not the agent model. A third job,
-        # measured separately (bench/verify.py): qwen2.5:3b catches 18 of 22
-        # unsupported claims, llama3.2:3b only 10 — it agrees with almost
-        # anything, which is the same disposition that makes it stop when told
-        # to and a liability here. The supervisor and the verifier wanting
-        # different models is not an inconsistency; they want different things.
-        backend = get_backend(local_only=local_only, role=INTERACTIVE)
+        # Its own role, defaulting to the extraction model rather than the
+        # agent one. Measured separately (bench/verify.py): qwen2.5:3b catches
+        # 18 of 22 unsupported claims where llama3.2:3b catches 10 — it agrees
+        # with almost anything, the same disposition that makes it stop when
+        # told to and a liability here. Set LLM_VERIFY_BACKEND=groq to put the
+        # one call that most needs a bigger model on one.
+        backend = get_backend(local_only=local_only, role=VERIFY)
 
     numbered = "\n".join(f"{n}. {text}" for n, text in enumerate(sentences, 1))
     evidence = "\n\n".join(f"[{n}] {text}" for n, text in enumerate(passages, 1))
@@ -213,6 +230,23 @@ def verify(
         checked=len(sentences),
         note=str(response.data.get("note") or "").strip(),
         seconds=elapsed,
+        caveat=_caveat_for(backend) if flagged else "",
+    )
+
+
+def _caveat_for(backend: Any) -> str:
+    """How far to trust a flag from this backend.
+
+    Only the local model's rates have been measured here. A hosted model is
+    very likely better at the paraphrase case that produces most of the false
+    alarms, but "likely better" is not a number, so it gets no claim either way.
+    """
+    name = str(getattr(backend, "name", "") or "")
+    if name.startswith("ollama"):
+        return LOCAL_CAVEAT
+    return (
+        "Advisory. Flags mark claims the cited passages did not clearly "
+        "support; they are not a judgement that a claim is false."
     )
 
 

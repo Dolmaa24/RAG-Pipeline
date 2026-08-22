@@ -264,10 +264,11 @@ class Supervisor:
         actually covered the question — which is the assessment this phase
         needed, already built and already tested.
         """
-        question = self._retrieval_question(state)
+        question = state.get("focus") or state["question"]
+        leads = self._lead_queries(state)
         self._report({"stage": "synthesising", "round": state.get("rounds", 0)})
         started = time.perf_counter()
-        reply = self._answer(question)
+        reply = self._answer(question, leads)
         elapsed = time.perf_counter() - started
         self._report({
             "stage": "synthesised",
@@ -288,7 +289,7 @@ class Supervisor:
                 {
                     "kind": "synthesis",
                     "question": question,
-                    "leads_used": len(state.get("leads") or []),
+                    "leads_used": len(leads),
                     "sufficient": reply.sufficient,
                     "cited": reply.cited,
                     "sources": len(sources),
@@ -297,34 +298,32 @@ class Supervisor:
             ],
         }
 
-    def _retrieval_question(self, state: _State) -> str:
-        """The question, plus the names the specialist turned up.
+    def _lead_queries(self, state: _State) -> list[str]:
+        """The specialist's findings, as extra searches rather than extra words.
 
-        Synthesis retrieves for itself, which meant a specialist's findings were
-        used only as a hint for the *next* round and never reached the answer.
-        Asked which two acquisitions the corpus described, a run listed both
-        from the graph and then answered with one, because `answer_question`
-        went back to the corpus with the original wording and the second
-        document contained none of it.
+        Synthesis retrieves for itself, so a specialist's findings reached the
+        next round's prompt and never the answer. The first attempt at fixing
+        that appended the discovered names to the question, and the benchmark
+        showed the cost of it plainly: enumeration went to 3/3 and multi-hop
+        fell to 1/3, against 2/3 for simply asking once. Padding a question
+        with entity names buys the documents those names are in by diluting the
+        question that was actually asked.
 
-        Appending the names fixes that with the machinery already there:
-        retrieval is hybrid, so a name that appears verbatim in a document is
-        exactly what the BM25 leg is good at finding. This is what the leads are
-        for — carrying a discovery into the answer, not sending the next round
-        back to re-read what it already has.
+        As separate queries they are fused instead of blended. Measured on one
+        pair: asked for the quarterly revenue with "Northwind acquisition
+        price" alongside, the revenue document stays at rank 1 and the board
+        memo joins at rank 2 — both, rather than one at the other's expense.
         """
-        question = state.get("focus") or state["question"]
-        leads = state.get("leads") or []
-        if not leads:
-            return question
-        return f"{question}\n\nRelevant names found so far: {', '.join(leads[:10])}"
+        return list(state.get("leads") or [])[:10]
 
-    def _answer(self, question: str):
+    def _answer(self, question: str, extra_queries: Optional[list[str]] = None):
         if self._answerer is not None:
             return self._answerer(question)
         from pipeline.retrieve.answer import answer_question
 
-        return answer_question(question, local_only=self.local_only)
+        return answer_question(
+            question, local_only=self.local_only, extra_queries=extra_queries or None
+        )
 
     # ------------------------------------------------------------------ #
     # Routing

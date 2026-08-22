@@ -49,6 +49,10 @@ BULK = "bulk"
 #: A loop choosing tools. Its own role because the job is different enough that
 #: the best model for it is a different model — measured, not assumed.
 AGENT = "agent"
+#: Checking a drafted answer against its sources. Its own role because it is a
+#: third job that a third model wins: it wants scepticism, where the agent role
+#: wants a model that knows when to stop.
+VERIFY = "verify"
 
 
 def get_backend(
@@ -110,6 +114,8 @@ def _configured(role: str) -> str:
         return config.LLM_INTERACTIVE_BACKEND
     if role == AGENT and config.LLM_AGENT_BACKEND:
         return config.LLM_AGENT_BACKEND
+    if role == VERIFY and config.LLM_VERIFY_BACKEND:
+        return config.LLM_VERIFY_BACKEND
     return config.LLM_BACKEND
 
 
@@ -200,6 +206,7 @@ def status() -> dict:
 __all__ = [
     "AGENT",
     "BULK",
+    "VERIFY",
     "GroqBackend",
     "INTERACTIVE",
     "LLMBackend",

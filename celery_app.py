@@ -149,6 +149,15 @@ def _warm_agents_worker() -> None:
       ``fork()`` applies.
     * It runs on a daemon thread, so a slow or failing load delays no task and
       blocks no shutdown. The worst case is the behaviour we already have.
+
+    The threads pool is also what makes warming *last*. ``max_tasks_per_child``
+    is implemented by the prefork pool alone — it recycles forked child
+    processes — and the threads pool ignores it, so this worker never recycles
+    and the embedder it loads is held for the worker's life. Move the agents
+    queue to prefork and this stops working twice over: each forked child would
+    need its own copy, and loading one is exactly what billiard's four-second
+    handshake kills. ``tests/test_graph_latency.py`` pins the pool for that
+    reason.
     """
     if not config.AGENT_WARM_EMBEDDER:
         return

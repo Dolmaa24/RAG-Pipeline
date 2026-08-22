@@ -406,19 +406,50 @@ def test_leads_are_carried_into_the_answer_not_into_the_next_search():
     exactly what the BM25 leg finds.
     """
     supervisor = Supervisor(backend=Quiet(), answerer=Reply(), verify_answer=False)
-    question = supervisor._retrieval_question(
+    leads = supervisor._lead_queries(
         {"question": "Which acquisitions are described?",
+         "rounds": 2,
          "leads": ["Northwind Logistics", "Fabrikam Freight"]}
     )
 
-    assert "Which acquisitions are described?" in question
-    assert "Northwind Logistics" in question
-    assert "Fabrikam Freight" in question
+    # Separate queries, fused with the question's own retrieval — not words
+    # pasted into it. Appending them cost as many answers as it won.
+    assert leads == ["Northwind Logistics", "Fabrikam Freight"]
 
 
-def test_a_question_with_no_leads_is_left_alone():
+def test_a_question_with_no_leads_asks_for_nothing_extra():
     supervisor = Supervisor(backend=Quiet(), answerer=Reply(), verify_answer=False)
-    assert supervisor._retrieval_question({"question": "plain", "leads": []}) == "plain"
+    assert supervisor._lead_queries({"question": "plain", "leads": []}) == []
+
+
+def test_extra_queries_do_not_displace_the_question():
+    """Fused, not blended.
+
+    The question stays the first leg and keeps its rank-fusion advantage; a
+    lead adds a leg rather than editing the one that matters. A lead that
+    merely restates the question is not a second search.
+    """
+    from pipeline.retrieve.orchestrator import retrieve
+
+    seen: dict = {}
+
+    class FakeRetriever:
+        def retrieve(self, queries, **kwargs):
+            seen["queries"] = list(queries)
+            return []
+
+    retrieve(
+        "What was the revenue?",
+        extra_queries=["Northwind Logistics", "what was the revenue?"],
+        rewrite=False,
+        use_graph=False,
+        retriever=FakeRetriever(),
+    )
+
+    assert seen["queries"][0] == "What was the revenue?"
+    assert "Northwind Logistics" in seen["queries"]
+    # Deduplicated case-insensitively against the plan's own queries.
+    assert len(seen["queries"]) == 2
 
 
 def test_the_graph_can_be_asked_which_rather_than_only_about_whom():

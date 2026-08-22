@@ -38,6 +38,8 @@ log = get_logger("answer")
 _PROMPT = """Answer the question using ONLY the numbered sources below.
 
 Rules:
+- Answer every part of the question. A question asking two things is not
+  answered by one of them: if it asks what happened and for how much, give both.
 - Cite the sources you used inline, as [1], [2]. Every factual claim needs one.
 - If the sources do not contain the answer, set sufficient to false and say
   plainly what is missing. Do not answer from your own knowledge.
@@ -171,6 +173,7 @@ def answer_question(
     rewrite: Optional[bool] = None,
     local_only: bool = False,
     result: Optional[RetrievalResult] = None,
+    extra_queries: Optional[list[str]] = None,
     backend=None,
 ) -> Answer:
     """Retrieve, then answer from what was retrieved.
@@ -196,6 +199,7 @@ def answer_question(
             rerank_results=rerank_results,
             rewrite=rewrite,
             local_only=local_only,
+            extra_queries=extra_queries,
         )
     reply.retrieval = result
     reply.warnings.extend(result.warnings)

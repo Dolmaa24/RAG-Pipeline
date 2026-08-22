@@ -888,6 +888,51 @@ The prefork pool's four-second startup handshake and macOS's refusal to let Meta
 survive `fork()` are both already scars in this codebase; an agent worker holding
 model clients and thread pools is exactly the shape that trips them again.
 
+## What the whole thing actually scores
+
+`bench/agents.py`, run against the corpus `bench/fixtures.py` seeds. Both paths
+answer the same thirteen questions and are scored the same way — substring
+matching against facts written down in advance, which cannot reward a good
+answer phrased oddly and cannot be talked into accepting a wrong one.
+
+| kind | ask once | investigate |
+|---|---|---|
+| single_hop | 4/4 · 6.6s | 3/4 · 20.7s |
+| multi_hop | 2/3 | 2/3 |
+| enumeration | **1/3** | **3/3** |
+| unanswerable | 3/3 | 3/3 |
+| **all** | **10/13** · 6.6s | **11/13** · 28.1s |
+
+**Enumeration is where the loop earns its keep, and it is the only place.**
+"Which acquisitions does the corpus describe" names no entity to start from, and
+a single retrieval answers it partially or not at all. Everywhere else the two
+are within a case of each other, at four times the latency.
+
+That is a narrower claim than this plan implied throughout, and it is the honest
+one: **route to an investigation when a question asks *which* or *how many*, and
+answer everything else directly.** Nothing in the system does that routing yet.
+
+### Three things the benchmark found that no component test could
+
+**Appending leads to the synthesis question was costing as much as it won.** The
+first version of the fix scored enumeration 3/3 and multi-hop 1/3 — against 2/3
+for simply asking once. Padding a question with discovered entity names buys the
+documents those names are in by diluting the question that was actually asked.
+As *separate* queries, fused rather than blended, both survive: the revenue
+document stays at rank 1 while the board memo joins at rank 2. Enumeration held
+at 3/3 and multi-hop returned to 2/3.
+
+**Synthesis never asked for every part of a question.** The prompt required
+citations and honesty about insufficiency, and said nothing about a question
+with two halves — so two-part questions came back half-answered while citing
+the passage holding the other half.
+
+**The loop confabulated where asking once did not.** "What did Contoso Shipping
+acquire?" — nothing in the corpus — was answered rather than declined, once, in
+the baseline. It declines now, and the change that fixed it was not aimed at it:
+a question no longer padded with real company names is a question with less to
+confabulate from.
+
 ## How you'll know it works
 
 `bench/agents.py`, in the shape of the graph-model benchmark that already exists.

@@ -190,6 +190,13 @@ class EngineConfig(BaseSettings):
     #: rather than a deletion, but the false-alarm rate is high enough that it
     #: is a setting rather than a fact of the system.
     AGENT_VERIFY: bool = True
+    #: Which backend checks the answer. None follows LLM_BACKEND, which means
+    #: the local model. Paraphrase is where a 3B fails: it rejects "Priya Raman
+    #: leads the combined group" against "Priya Raman was appointed chief
+    #: executive of the combined group", and no prompt wording has moved that.
+    #: One short call per answer, so a hosted model here costs little even on a
+    #: tokens-per-minute free tier.
+    LLM_VERIFY_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
     #: How much reaching-out an investigation gets when the caller allows it.
     #: Small on purpose: fetching is a last resort after the corpus came up
     #: short, not a strategy.

@@ -239,3 +239,30 @@ def test_a_failed_warm_up_does_not_raise(monkeypatch):
 class _NoThread:
     def start(self):
         raise AssertionError("a thread was started while warming was disabled")
+
+
+def test_the_agents_worker_stays_on_the_threads_pool():
+    """Warming only lasts because this worker never recycles.
+
+    ``max_tasks_per_child`` is implemented by the prefork pool alone, and the
+    threads pool ignores it — so the embedder loaded at startup is held for the
+    worker's life. On prefork it would break twice: each forked child needs its
+    own copy, and loading one is exactly what billiard's four-second UP
+    handshake kills. That makes the pool choice load-bearing rather than a
+    preference, so it is pinned here.
+    """
+    import inspect
+    from pathlib import Path
+
+    from celery.concurrency.base import BasePool
+    from celery.concurrency.thread import TaskPool
+
+    assert "max_tasks_per_child" not in inspect.getsource(BasePool.__init__)
+    assert "max_tasks_per_child" not in inspect.getsource(inspect.getmodule(TaskPool))
+
+    launcher = Path(__file__).resolve().parent.parent / "run.sh"
+    agents_command = next(
+        line for line in launcher.read_text().splitlines()
+        if "--queues=agents" in line
+    )
+    assert "--pool=threads" in agents_command
