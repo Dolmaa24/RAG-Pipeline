@@ -16,9 +16,9 @@ keeps the scores and ids that prose throws away.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 from pipeline.retrieve.filters import MetadataFilter
 
@@ -29,6 +29,31 @@ def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 40)].rstrip() + f"\n… [truncated at {limit} chars]"
+
+
+def _as_count(value: Any) -> Any:
+    """Read a word where a number was asked for.
+
+    Every phrasing of "list the acquisitions" tested here had the model send
+    ``limit: "all"``, which failed validation and cost the round. That is not a
+    model getting it wrong occasionally — it is the honest way to say "no limit"
+    to a field that offers no way to say it, and a schema that punishes the
+    honest answer is the thing that is wrong. Numeric strings are left to
+    Pydantic, which already coerces them.
+    """
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in {"all", "every", "everything", "max", "maximum", "none", "no limit", "unlimited"}:
+            return _COUNT_MAX
+    return value
+
+
+#: What a word-limit resolves to. Above every tool's own ceiling, so each
+#: field's own bound is what actually clamps it.
+_COUNT_MAX = 100
+
+#: A count a model can also express in words.
+Count = Annotated[int, BeforeValidator(_as_count)]
 
 
 class FilterArgs(BaseModel):
@@ -125,7 +150,7 @@ class ProfileResult(BaseModel):
 
 class SearchArgs(FilterArgs):
     query: str = Field(..., min_length=1, description="What to search for.")
-    limit: int = Field(8, ge=1, le=50)
+    limit: Count = Field(8, ge=1, le=50)
     fusion: Optional[str] = Field(
         None,
         description=(
@@ -180,7 +205,7 @@ class SearchResult(BaseModel):
 
 class AnswerArgs(FilterArgs):
     question: str = Field(..., min_length=1)
-    limit: int = Field(8, ge=1, le=50)
+    limit: Count = Field(8, ge=1, le=50)
     use_graph: Optional[bool] = None
 
 
@@ -218,7 +243,7 @@ class NeighborsArgs(BaseModel):
         description="An entity name, e.g. 'Acme Corporation'. Exact-ish match.",
     )
     hops: int = Field(1, ge=1, le=3)
-    limit: int = Field(25, ge=1, le=100)
+    limit: Count = Field(25, ge=1, le=100)
 
 
 class RelationsArgs(BaseModel):
@@ -230,14 +255,14 @@ class RelationsArgs(BaseModel):
             "exist."
         ),
     )
-    limit: int = Field(25, ge=1, le=100)
+    limit: Count = Field(25, ge=1, le=100)
 
 
 class PathArgs(BaseModel):
     start: str = Field(..., min_length=1)
     end: str = Field(..., min_length=1)
     max_hops: int = Field(3, ge=1, le=4)
-    limit: int = Field(25, ge=1, le=100)
+    limit: Count = Field(25, ge=1, le=100)
 
 
 class GraphResult(BaseModel):

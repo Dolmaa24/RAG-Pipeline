@@ -282,7 +282,7 @@ class Supervisor:
             "answer": reply.answer,
             "sufficient": reply.sufficient,
             "sources": sources,
-            "passages": [str(source.get("text", "")) for source in sources],
+            "passages": _to_check(sources, reply.cited),
             "trace": [
                 *state.get("trace", []),
                 {
@@ -440,6 +440,36 @@ class Supervisor:
             self._on_progress(event)
         except Exception as exc:  # pragma: no cover - defensive
             log.debug("agents.supervisor.progress_failed", error=repr(exc))
+
+
+#: Enough context to judge a claim without burying it. Retrieval returns
+#: everything that scored; a verifier needs what the answer actually rested on.
+_UNCITED_FALLBACK = 3
+
+
+def _to_check(sources: list[dict[str, Any]], cited: list[int]) -> list[str]:
+    """The passages to verify against: the ones the answer cited.
+
+    Verifying against everything retrieved was the single largest cause of
+    false alarms. Given seven passages — two relevant, five from an unrelated
+    Java lab manual that scored well enough to be returned — the verifier
+    flagged both halves of a correct answer. Given the two the answer cited, it
+    passed them both. The noise was drowning the evidence.
+
+    A citation is the model's own claim about what it used, so this is also the
+    honest question to ask: not "is this true somewhere in the corpus" but "does
+    what you pointed at say it". When nothing was cited there is no such claim
+    to check, and the best-scoring few are the nearest thing to it.
+    """
+    numbered = {source.get("number"): str(source.get("text", "")) for source in sources}
+    chosen = [numbered[n] for n in (cited or []) if n in numbered and numbered[n]]
+    if chosen:
+        return chosen
+    return [
+        str(source.get("text", ""))
+        for source in sources[:_UNCITED_FALLBACK]
+        if source.get("text")
+    ]
 
 
 def _leads_from(trace: list[dict[str, Any]]) -> list[str]:

@@ -57,6 +57,20 @@ CLAIMS: dict[str, tuple[str, bool]] = {
     "invented_event": ("The chief executive of Beta Industries resigned after the deal.", True),
     "invented_cause": ("Acme acquired Beta Industries to enter the automotive market.", True),
     "reversed": ("Beta Industries acquired Acme Corporation in March 2026.", True),
+    # Compound claims. A true half was found to carry a false half through
+    # unchallenged, because the model judges a sentence as one unit.
+    "compound_both_true": (
+        "Acme Corporation acquired Beta Industries in March 2026 and revenue for "
+        "the quarter was 42.5 million dollars.", False,
+    ),
+    "compound_half_false": (
+        "Acme Corporation acquired Beta Industries and Northwind Logistics "
+        "acquired Contoso Shipping.", True,
+    ),
+    "compound_half_invented": (
+        "Beta Industries makes industrial sensors and its chief executive "
+        "resigned after the deal.", True,
+    ),
 }
 
 
@@ -83,6 +97,10 @@ CASES: list[Case] = [
     # Mostly wrong.
     Case("mostly_invented", ("invented_place", "invented_event", "verbatim_revenue")),
     Case("all_invented", ("invented_person", "invented_place", "invented_event")),
+    # One sentence, two claims.
+    Case("compound_clean", ("compound_both_true",)),
+    Case("compound_hides_a_lie", ("compound_half_false",)),
+    Case("compound_hides_invention", ("compound_half_invented",)),
 ]
 
 
@@ -112,7 +130,12 @@ def run(model: str | None, repeat: int) -> Score:
 
         for name in case.claims:
             sentence, unsupported = CLAIMS[name]
-            was_flagged = sentence in flagged
+            # Matched by containment, not equality: a compound claim is split
+            # into clauses before checking, so a flag lands on a clause. An
+            # exact match would score every one of those as a miss.
+            was_flagged = any(
+                clause in sentence or sentence in clause for clause in flagged
+            )
             if unsupported:
                 score.to_catch += 1
                 if was_flagged:

@@ -668,13 +668,53 @@ after    round 1  graph_relations(relation=ACQUIRED)
           Northwind Logistics acquired Fabrikam Freight in June 2026"
 ```
 
-**What it did not fix.** Rephrased as "What acquisitions does the corpus
-describe?" the same run still comes back insufficient — the model does not
-reach for `graph_relations` from that wording. The fix works on the shape of
-question it was built against and does not generalise to every phrasing of it,
-which is worth knowing before trusting it. And the compound answer is flagged
-`[unsupported]` by the verifier even though both halves are in the sources:
-the 29% false-alarm rate, landing on a sentence with two claims in it.
+### Both of those, fixed — and again not where they looked
+
+**The rephrasing was not a tool-selection problem.** Run across five phrasings,
+four of five picked `graph_relations` correctly. All five then sent
+``limit: "all"``, a string, which failed validation and cost the round. The
+original question only recovered because it had a second round to spend. That
+is not a model getting it wrong occasionally: "all" is the honest way to say
+*no limit* to a field offering no way to say it, and a schema that punishes the
+honest answer is the thing that is wrong. A `Count` type now reads the word.
+
+```
+before   "What acquisitions does the corpus describe?"  insufficient, 2 rounds
+after    same question                                  answered, 1 round, 17.9s
+         "Which two acquisitions…"      33.8s / 2 rounds → 20.6s / 1 round
+```
+
+**The verifier's false alarms were mostly noise, not compound sentences.** Given
+seven retrieved passages — two relevant, five from an unrelated Java lab manual
+that scored well enough to be returned — it flagged both halves of a correct
+answer. Given the two the answer *cited*, it passed them both. It now checks
+against the cited passages, which is what this plan said in the first place and
+is the honest question anyway: not "is this true somewhere in the corpus" but
+"does what you pointed at say it".
+
+Compound sentences were a real but smaller problem, in the opposite direction.
+A true first half carried a false second half through unchallenged — *"Acme
+acquired Beta Industries and Northwind acquired Contoso Shipping"* was vouched
+for whole, and the same two claims as separate sentences had the invention
+flagged. Clauses are now split where a sentence plainly carries two claims.
+A/B on identical cases:
+
+| | catches | false alarms |
+|---|---|---|
+| clause splitting off | 10/13 | 4/15 |
+| clause splitting on | **11/13** | 5/15 |
+
+One-for-one, and worth taking only because a miss costs more than an alarm. The
+added alarm is not really the splitter's: the clause it fails on is a revenue
+claim, and the same claim is wrongly flagged in both configurations. Splitting
+exposed an existing blind spot rather than creating one.
+
+**What is still wrong with the verifier.** Roughly one unit per answer is still
+flagged wrongly, and the pattern is consistent: it does not accept a paraphrase.
+*"Priya Raman leads the combined group"* is flagged against a passage saying
+*"Priya Raman was appointed chief executive of the combined group"*, despite the
+prompt saying in as many words that a restatement counts. That is a 3B model's
+limit, not a plumbing fault, and no further prompt wording has moved it.
 
 ### A run that shows the design working
 

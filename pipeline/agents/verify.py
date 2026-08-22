@@ -30,6 +30,18 @@ log = get_logger("agents.verify")
 #: caused by the splitter rather than by the model.
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(\[])")
 
+#: Where one sentence carries two claims. A true first half was found to carry
+#: a false second half through unchallenged: "Acme acquired Beta Industries and
+#: Northwind acquired Contoso Shipping" was vouched for in full, and the same
+#: two claims as separate sentences had the invented one flagged. The model
+#: judges a sentence as a unit, so a unit holding two claims is judged on
+#: whichever it notices.
+_CLAUSE = re.compile(r"\s*(?:;|,?\s+and|,?\s+but|,?\s+while|,?\s+whereas)\s+", re.IGNORECASE)
+
+#: Both halves must be long enough to be a claim rather than a fragment.
+#: "Revenue was 42.5 million dollars and rising" is one claim, not two.
+_MIN_CLAUSE = 25
+
 _SCHEMA: dict[str, Any] = {
     "type": "object",
     "title": "verification",
@@ -98,7 +110,26 @@ class Verdict:
 
 
 def split_sentences(text: str) -> list[str]:
-    return [part.strip() for part in _SENTENCE.split(text.strip()) if part.strip()]
+    """The units to check, one claim each where that can be told apart."""
+    units: list[str] = []
+    for sentence in _SENTENCE.split(text.strip()):
+        sentence = sentence.strip()
+        if sentence:
+            units.extend(_clauses(sentence))
+    return units
+
+
+def _clauses(sentence: str) -> list[str]:
+    """One sentence, split where it plainly carries more than one claim.
+
+    Conservative on purpose. Splitting too eagerly produces fragments the model
+    then cannot support from any passage, and a false alarm teaches a reader to
+    ignore the flags — which costs the catches their value.
+    """
+    parts = [part.strip() for part in _CLAUSE.split(sentence) if part.strip()]
+    if len(parts) < 2 or any(len(part) < _MIN_CLAUSE for part in parts):
+        return [sentence]
+    return parts
 
 
 def annotate(answer: str, unsupported: list[str]) -> str:
