@@ -176,8 +176,14 @@ def test_leads_are_merged_without_duplicates():
     assert _merge(["Acme"], ["acme", "Beta"]) == ["Acme", "Beta"]
 
 
-def test_the_second_round_is_told_what_the_first_found():
-    """This is the mechanism that makes a second hop worth taking."""
+def test_the_second_round_is_told_what_is_missing_not_what_was_found():
+    """The first version of this got the instruction backwards.
+
+    It handed round two the names round one had turned up and called them
+    "worth searching for" — which, for a question round one had partly
+    answered, meant re-reading what it already had. Round two now learns what
+    is established and is asked for what is missing.
+    """
     class Finder:
         name, model = "fake", "fake-1"
 
@@ -203,8 +209,10 @@ def test_the_second_round_is_told_what_the_first_found():
         backend=backend, answerer=answerer, verify_answer=False
     ).investigate("what did Acme acquire?")
 
-    # The user-role prompt opening the second specialist run carries the leads.
-    assert any("worth searching for" in prompt for prompt in backend.prompts)
+    second = [p for p in backend.prompts if "Already established" in p]
+    assert second, "round two was not told what round one established"
+    assert "partial" in second[0]
+    assert "Look for what is missing" in second[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -343,3 +351,86 @@ def test_the_investigation_serialises_with_its_reasoning():
     assert payload["rounds"] == 1
     assert isinstance(payload["trace"], list)
     assert payload["sources"]
+
+
+# --------------------------------------------------------------------------- #
+# Leads: what they are for, and what they are not
+# --------------------------------------------------------------------------- #
+
+
+def test_a_place_already_visited_is_not_offered_as_a_lead():
+    """A seed comes back in its own results, which made it look like a find.
+
+    Round one searched "Acme Corporation" and got back an edge naming Acme and
+    Beta. Both were then offered to round two as things "worth searching for",
+    so round two searched Acme again, got the same edge, and the no-progress
+    stop ended the run on a half-answer.
+    """
+    from pipeline.agents.supervisor import _searched_in
+
+    supervisor = Supervisor(backend=Quiet(), answerer=Reply(), verify_answer=False)
+    brief = supervisor._brief(
+        {
+            "answer": "",
+            "leads": ["Acme Corporation", "Beta Industries", "Rotterdam"],
+            "searched": ["Acme Corporation", "Beta Industries"],
+        },
+        "the task",
+    )
+
+    assert "Rotterdam" in brief
+    assert "Acme Corporation" not in brief
+
+    assert _searched_in(
+        [
+            {"kind": "tool", "arguments": {"entity": "Acme Corporation", "hops": 2}},
+            {"kind": "tool", "arguments": {"query": "revenue", "limit": 8}},
+            {"kind": "turn", "arguments": {}},
+        ]
+    ) == ["Acme Corporation", "revenue"]
+
+
+def test_a_first_round_gets_the_task_and_nothing_else():
+    supervisor = Supervisor(backend=Quiet(), answerer=Reply(), verify_answer=False)
+    assert supervisor._brief({"answer": "", "leads": [], "searched": []}, "the task") == "the task"
+
+
+def test_leads_are_carried_into_the_answer_not_into_the_next_search():
+    """What the leads are actually for.
+
+    Synthesis retrieves for itself, so a specialist's findings reached the next
+    round's prompt and never the answer. A run listed both acquisitions from
+    the graph and then answered with one, because retrieval went back to the
+    corpus with the original wording and the second document contained none of
+    it. Retrieval is hybrid, so a name appearing verbatim in a document is
+    exactly what the BM25 leg finds.
+    """
+    supervisor = Supervisor(backend=Quiet(), answerer=Reply(), verify_answer=False)
+    question = supervisor._retrieval_question(
+        {"question": "Which acquisitions are described?",
+         "leads": ["Northwind Logistics", "Fabrikam Freight"]}
+    )
+
+    assert "Which acquisitions are described?" in question
+    assert "Northwind Logistics" in question
+    assert "Fabrikam Freight" in question
+
+
+def test_a_question_with_no_leads_is_left_alone():
+    supervisor = Supervisor(backend=Quiet(), answerer=Reply(), verify_answer=False)
+    assert supervisor._retrieval_question({"question": "plain", "leads": []}) == "plain"
+
+
+def test_the_graph_can_be_asked_which_rather_than_only_about_whom():
+    """graph_neighbors and graph_path both need an entity you already know.
+
+    Asked "which two acquisitions are described" with only those available, a
+    model passed the word "acquisitions" as an entity name, got the nearest
+    match by vector similarity, and anchored the whole run on one arbitrary
+    company. Listing edges by kind needs no starting point.
+    """
+    from pipeline.agents.tools import Effect, catalog
+
+    names = {spec.name for spec in catalog([Effect.READ])}
+    assert "graph_relations" in names
+    assert "graph_relations" in CORPUS.tools

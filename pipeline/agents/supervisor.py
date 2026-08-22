@@ -81,6 +81,9 @@ class _State(TypedDict, total=False):
     focus: str
     leads: list[str]
     rounds: int
+    #: Names already used as a tool argument. A place that has been visited is
+    #: not a lead, however often it comes back in its own results.
+    searched: list[str]
     answer: str
     sufficient: bool
     sources: list[dict[str, Any]]
@@ -172,11 +175,7 @@ class Supervisor:
         # crawl_site cannot decide to crawl.
         loop.tools = lambda: role.catalog(self.budget.effects())  # type: ignore[method-assign]
 
-        leads = state.get("leads") or []
-        prompt = task if not leads else (
-            f"{task}\n\nRelated things found so far, worth searching for: "
-            f"{', '.join(leads[:6])}"
-        )
+        prompt = self._brief(state, task)
 
         self._report({
             "stage": "gather",
@@ -190,6 +189,7 @@ class Supervisor:
         self._warnings.extend(result.warnings)
 
         found = _leads_from(result.trace)
+        searched = _merge(state.get("searched") or [], _searched_in(result.trace))
         self._report({
             "stage": "gathered",
             "role": role.name,
@@ -200,7 +200,8 @@ class Supervisor:
         return {
             **state,
             "rounds": state.get("rounds", 0) + 1,
-            "leads": _merge(leads, found),
+            "leads": _merge(state.get("leads") or [], found),
+            "searched": searched,
             "trace": [
                 *state.get("trace", []),
                 {
@@ -214,6 +215,47 @@ class Supervisor:
             ],
         }
 
+    def _brief(self, state: _State, task: str) -> str:
+        """What to tell a specialist that is not the first one to try.
+
+        The first version of this passed the names round one turned up and said
+        they were "worth searching for". Asked which *two* acquisitions the
+        corpus described, round one found one of them and handed round two
+        ``Acme Corporation, Beta Industries`` — the two halves of the answer it
+        already had. Round two searched exactly those, got the same triple back,
+        and the no-progress stop ended the run on a half-answer. The leads were
+        not wrong; the instruction was. It sent the specialist to re-examine
+        what was already covered, when what was needed was everything else.
+
+        So a later round is told three things, in this order: what is already
+        established, that it must therefore find something *else*, and only then
+        any name that turned up without being looked into. A name already used
+        as a tool argument is not a lead — it is a place that has been.
+        """
+        parts = [task]
+
+        draft = (state.get("answer") or "").strip()
+        if draft:
+            parts.append(
+                "Already established, from what has been gathered so far:\n"
+                f"{draft}\n\n"
+                "This does not fully answer the question. Look for what is "
+                "missing from it. Do not search again for anything above — "
+                "repeating it adds nothing."
+            )
+
+        searched = {name.lower() for name in state.get("searched") or []}
+        fresh = [
+            lead for lead in (state.get("leads") or [])
+            if lead.lower() not in searched
+        ]
+        if fresh:
+            parts.append(
+                "Turned up but not yet looked into: " + ", ".join(fresh[:6])
+            )
+
+        return "\n\n".join(parts)
+
     def _synthesise(self, state: _State) -> _State:
         """Answer from the corpus, and learn whether that was possible.
 
@@ -222,7 +264,7 @@ class Supervisor:
         actually covered the question — which is the assessment this phase
         needed, already built and already tested.
         """
-        question = state.get("focus") or state["question"]
+        question = self._retrieval_question(state)
         self._report({"stage": "synthesising", "round": state.get("rounds", 0)})
         started = time.perf_counter()
         reply = self._answer(question)
@@ -246,6 +288,7 @@ class Supervisor:
                 {
                     "kind": "synthesis",
                     "question": question,
+                    "leads_used": len(state.get("leads") or []),
                     "sufficient": reply.sufficient,
                     "cited": reply.cited,
                     "sources": len(sources),
@@ -253,6 +296,28 @@ class Supervisor:
                 },
             ],
         }
+
+    def _retrieval_question(self, state: _State) -> str:
+        """The question, plus the names the specialist turned up.
+
+        Synthesis retrieves for itself, which meant a specialist's findings were
+        used only as a hint for the *next* round and never reached the answer.
+        Asked which two acquisitions the corpus described, a run listed both
+        from the graph and then answered with one, because `answer_question`
+        went back to the corpus with the original wording and the second
+        document contained none of it.
+
+        Appending the names fixes that with the machinery already there:
+        retrieval is hybrid, so a name that appears verbatim in a document is
+        exactly what the BM25 leg is good at finding. This is what the leads are
+        for — carrying a discovery into the answer, not sending the next round
+        back to re-read what it already has.
+        """
+        question = state.get("focus") or state["question"]
+        leads = state.get("leads") or []
+        if not leads:
+            return question
+        return f"{question}\n\nRelevant names found so far: {', '.join(leads[:10])}"
 
     def _answer(self, question: str):
         if self._answerer is not None:
@@ -324,6 +389,7 @@ class Supervisor:
                 "question": question,
                 "focus": question,
                 "leads": [],
+                "searched": [],
                 "rounds": 0,
                 "trace": [],
                 "acquired": [],
@@ -384,6 +450,24 @@ def _leads_from(trace: list[dict[str, Any]]) -> list[str]:
             continue
         found.extend(_ENTITY.findall(str(step.get("observation", ""))))
     return found
+
+
+#: Arguments that name a thing to look at, as opposed to tuning a search.
+_TARGET_ARGUMENTS = ("entity", "start", "end", "query", "question")
+
+
+def _searched_in(trace: list[dict[str, Any]]) -> list[str]:
+    """What a round actually looked at, from the arguments it passed."""
+    looked: list[str] = []
+    for step in trace:
+        if step.get("kind") != "tool":
+            continue
+        arguments = step.get("arguments") or {}
+        for key in _TARGET_ARGUMENTS:
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                looked.append(value.strip())
+    return looked
 
 
 def _merge(existing: list[str], found: list[str]) -> list[str]:

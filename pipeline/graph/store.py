@@ -260,6 +260,58 @@ class GraphStore:
             return []
         return _dedupe([t for row in rows for t in _triples_from_row(row)])
 
+    def relations(
+        self, relation: Optional[str] = None, *, limit: int = 50
+    ) -> list[Triple]:
+        """Every edge, or every edge of one kind. No starting entity needed.
+
+        :meth:`neighbours` and :meth:`path` both require you to already know an
+        entity, which makes a whole class of question unanswerable: "which
+        acquisitions are described" names no node, only a kind of edge. Asked
+        that with only those two tools available, a model passed the word
+        "acquisitions" as an entity name, got the nearest match by vector
+        similarity, and anchored the entire run on one arbitrary company.
+        """
+        if relation:
+            query = """
+                MATCH (a:Entity)-[r:CONNECTS_TO]->(b:Entity)
+                WHERE UPPER(r.relation) = $relation
+                RETURN a.name, r, b.name
+                LIMIT $limit
+            """
+            parameters: dict[str, Any] = {
+                "relation": relation.strip().upper().replace(" ", "_"),
+                "limit": limit,
+            }
+        else:
+            query = """
+                MATCH (a:Entity)-[r:CONNECTS_TO]->(b:Entity)
+                RETURN a.name, r, b.name
+                LIMIT $limit
+            """
+            parameters = {"limit": limit}
+
+        try:
+            rows = self._rows(query, parameters)
+        except Exception as exc:
+            log.warning("graph.relations_failed", error=repr(exc))
+            return []
+        return _dedupe([t for row in rows for t in _triples_from_row(row)])
+
+    def relation_kinds(self, limit: int = 50) -> list[str]:
+        """Which kinds of relationship the graph actually holds."""
+        query = """
+            MATCH (a:Entity)-[r:CONNECTS_TO]->(b:Entity)
+            RETURN DISTINCT r.relation
+            LIMIT $limit
+        """
+        try:
+            rows = self._rows(query, {"limit": limit})
+        except Exception as exc:
+            log.warning("graph.relation_kinds_failed", error=repr(exc))
+            return []
+        return sorted({str(row[0]) for row in rows if row and row[0]})
+
     def path(
         self, start: str, end: str, *, max_hops: int = 3, limit: int = 25
     ) -> list[Triple]:

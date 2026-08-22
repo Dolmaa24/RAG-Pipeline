@@ -621,6 +621,61 @@ investigation and the obvious next thing to fix. It is not a cached handle away:
 Kuzu's lock is process-wide, and a long-lived read handle is what the current
 open-per-call design exists to avoid.
 
+### The leads mechanism, and what was actually wrong with it
+
+Round one's findings were handed to round two as names "worth searching for".
+Asked which *two* acquisitions the corpus described, round one found one and
+passed round two `Acme Corporation, Beta Industries` — the two halves of the
+answer it already had. Round two searched exactly those, got the same edge back,
+and the no-progress stop ended the run on a half-answer.
+
+Fixing it took three changes, and the first two were not enough on their own.
+
+**The instruction was backwards.** A later round is now told what is already
+established, that it must therefore find something *else*, and only then any
+name that turned up without being looked into. A name already used as a tool
+argument is not a lead — it is a place that has been. *Measured: no change.*
+The model searched Acme and Beta again anyway, four times, directly against
+"do not search again for anything above". Prompt wording is not a lever that
+moves a 3B model reliably, which this codebase has now found three times.
+
+**The catalog could not express the question.** `graph_neighbors` and
+`graph_path` both need an entity you already know. "Which acquisitions are
+described" names none, so the model passed the *word* "acquisitions" as an
+entity, got the nearest match by vector similarity, and anchored the run on one
+arbitrary company. `graph_relations` lists edges by kind and needs no starting
+point; `corpus_profile` now names the kinds that exist, because a model cannot
+ask for a kind it does not know about. *Measured: the model chose the new tool
+immediately and retrieved both acquisitions — and still answered with one.*
+
+**Synthesis never saw any of it.** `answer_question` retrieves for itself, so a
+specialist's findings reached the next round's prompt and never the answer. The
+run listed both acquisitions from the graph and then answered from a fresh
+retrieval that used the original wording, which the second document did not
+contain. The leads now go where they are useful: appended to the synthesis
+question, so hybrid retrieval's BM25 leg finds documents containing those names
+verbatim. *Measured: both acquisitions, `sufficient=True`, reproducibly.*
+
+```
+before   round 1  graph_neighbors("acquisitions")   → one acquisition
+         round 2  graph_neighbors("Acme")·("Beta")  → the same edge, twice
+         stopped: no progress · sufficient=False · half an answer
+
+after    round 1  graph_relations(relation=ACQUIRED)
+         round 2  graph_relations(limit=100)        → both
+         stopped: answered · sufficient=True · 33.8s
+         "Acme Corporation acquired Beta Industries in March 2026 and
+          Northwind Logistics acquired Fabrikam Freight in June 2026"
+```
+
+**What it did not fix.** Rephrased as "What acquisitions does the corpus
+describe?" the same run still comes back insufficient — the model does not
+reach for `graph_relations` from that wording. The fix works on the shape of
+question it was built against and does not generalise to every phrasing of it,
+which is worth knowing before trusting it. And the compound answer is flagged
+`[unsupported]` by the verifier even though both halves are in the sources:
+the 29% false-alarm rate, landing on a sentence with two claims in it.
+
 ### A run that shows the design working
 
 Asked *"What is the capital of Mongolia?"* — nothing in the corpus — the system

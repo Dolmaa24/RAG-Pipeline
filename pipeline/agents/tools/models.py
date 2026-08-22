@@ -85,6 +85,10 @@ class ProfileResult(BaseModel):
     documents: int = 0
     graph_entities: int = 0
     graph_relationships: int = 0
+    #: Which kinds of edge the graph holds. Named here because a model cannot
+    #: ask graph_relations for a kind it does not know exists, and guessing one
+    #: costs a turn to learn it was wrong.
+    relation_kinds: list[str] = Field(default_factory=list)
     filters: dict[str, list[str]] = Field(default_factory=dict)
     error: str = ""
 
@@ -97,6 +101,11 @@ class ProfileResult(BaseModel):
             f"Knowledge graph: {self.graph_entities} entities, "
             f"{self.graph_relationships} relationships.",
         ]
+        if self.relation_kinds:
+            lines.append(
+                "Relationship kinds (list them with graph_relations): "
+                + ", ".join(self.relation_kinds[:12])
+            )
         populated = {k: v for k, v in self.filters.items() if v}
         if populated:
             lines.append("Filter values in use:")
@@ -209,6 +218,18 @@ class NeighborsArgs(BaseModel):
         description="An entity name, e.g. 'Acme Corporation'. Exact-ish match.",
     )
     hops: int = Field(1, ge=1, le=3)
+    limit: int = Field(25, ge=1, le=100)
+
+
+class RelationsArgs(BaseModel):
+    relation: str = Field(
+        "",
+        description=(
+            "Kind of relationship to list, e.g. ACQUIRED or LOCATED_IN. Leave "
+            "empty to list every kind. corpus_profile names the kinds that "
+            "exist."
+        ),
+    )
     limit: int = Field(25, ge=1, le=100)
 
 

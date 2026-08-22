@@ -12,6 +12,8 @@ they cannot drift in behaviour or in quality.
 
 from __future__ import annotations
 
+from typing import Any
+
 from observability import get_logger
 
 from pipeline.agents.tools.models import (
@@ -25,6 +27,7 @@ from pipeline.agents.tools.models import (
     PathArgs,
     ProfileArgs,
     ProfileResult,
+    RelationsArgs,
     SearchArgs,
     SearchResult,
 )
@@ -67,24 +70,33 @@ def corpus_profile(args: ProfileArgs) -> ProfileResult:
         documents=len(filters.get("source", [])),
         graph_entities=counts["entities"],
         graph_relationships=counts["relationships"],
+        relation_kinds=counts.get("kinds") or [],
         filters=filters,
     )
 
 
-def _graph_counts() -> dict[str, int]:
-    """Graph size, or zeroes. An absent graph is normal, not an error."""
+def _graph_counts() -> dict[str, Any]:
+    """Graph size and shape, or zeroes. An absent graph is normal, not an error.
+
+    The relationship *kinds* are gathered in the same connection as the counts:
+    a model cannot ask graph_relations for a kind it does not know exists, and
+    guessing one costs a turn to find out it was wrong.
+    """
     from pipeline.graph.store import graph_exists
 
+    empty: dict[str, Any] = {"entities": 0, "relationships": 0, "kinds": []}
     if not graph_exists():
-        return {"entities": 0, "relationships": 0}
+        return empty
     try:
         from pipeline.graph.store import GraphStore
 
         with GraphStore(read_only=True) as store:
-            return store.count()
+            counts = dict(store.count())
+            counts["kinds"] = store.relation_kinds()
+            return counts
     except Exception as exc:
         log.warning("agents.tools.graph_count_failed", error=repr(exc))
-        return {"entities": 0, "relationships": 0}
+        return empty
 
 
 @tool(
@@ -228,6 +240,40 @@ def graph_path(args: PathArgs) -> GraphResult:
                         edges.append(rendered)
 
     return GraphResult(seeds=[*starts[:3], *ends[:3]], edges=edges[: args.limit])
+
+
+@tool(
+    name="graph_relations",
+    effect=Effect.READ,
+    cost_ms=80,
+    description=(
+        "List relationships of one kind across the whole graph — every "
+        "acquisition, every location, every appointment. Use it when the "
+        "question asks which or how many of something there are, rather than "
+        "about one named thing: graph_neighbors and graph_path both need an "
+        "entity you already know, and a question like 'which acquisitions are "
+        "described' names none."
+    ),
+)
+def graph_relations(args: RelationsArgs) -> GraphResult:
+    from pipeline.graph.store import GraphStore, graph_exists
+
+    if not graph_exists():
+        return GraphResult(available=False)
+
+    with GraphStore(read_only=True) as store:
+        triples = store.relations(args.relation or None, limit=args.limit)
+        if not triples and args.relation:
+            # Naming a kind the graph does not hold looks identical to a graph
+            # with nothing in it. Say which kinds exist instead.
+            kinds = store.relation_kinds()
+            return GraphResult(
+                seeds=kinds,
+                edges=[],
+            )
+
+    return GraphResult(seeds=[args.relation] if args.relation else [],
+                       edges=[t.render() for t in triples])
 
 
 @tool(

@@ -52,6 +52,7 @@ CORPUS = Role(
         "answer_from_corpus",
         "graph_neighbors",
         "graph_path",
+        "graph_relations",
         "fetch_chunk",
     ),
     system="""\
@@ -66,6 +67,10 @@ rather than the words the question used.
 
 When a graph result names something you had not searched for, that is a lead:
 search for it. Most questions worth asking need two steps, not one.
+
+When the question asks *which* or *how many* of something there are, list them
+with graph_relations rather than guessing an entity to start from. "Which
+acquisitions are described" names no entity, and searching for one invents it.
 
 Stop when you have the evidence, and say what you found.\
 """,

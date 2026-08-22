@@ -40,6 +40,7 @@ EXPECTED = {
     "answer_from_corpus": Effect.READ,
     "graph_neighbors": Effect.READ,
     "graph_path": Effect.READ,
+    "graph_relations": Effect.READ,
     "fetch_chunk": Effect.READ,
     "poll_task": Effect.READ,
     "detect_url": Effect.NETWORK,
