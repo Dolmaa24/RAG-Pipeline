@@ -324,6 +324,13 @@ class GraphStore:
         Corporation" for a graph that says the opposite. A wrong edge is worse
         than a missing one, so the cost is paid: a path that changes direction
         halfway is not found.
+
+        :func:`_path_triples` now orients each hop from the edge's own ``_src``
+        rather than from the order the walk crossed it, so the reversal this
+        guards against can no longer happen. Collapsing the two queries into
+        one undirected match would therefore be safe, and would additionally
+        find the direction-changing paths this misses — a behaviour change,
+        left for a caller who wants it.
         """
         if not start.strip() or not end.strip():
             return []
@@ -349,7 +356,7 @@ class GraphStore:
                 log.warning("graph.path_failed", error=repr(exc))
                 continue
             for row in rows:
-                triples.extend(_walk_triples(row[0]))
+                triples.extend(_path_triples(row[0]))
 
         return _dedupe(triples)[:limit]
 
@@ -409,16 +416,16 @@ def _triples_from_row(row: list[Any]) -> list[Triple]:
     Kuzu returns three different things depending on the query, and the caller
     should not have to know which ran:
 
-    * A **variable-length path** comes back as ``{"_nodes": [...], "_rels": [...]}``
-      where ``_nodes`` holds only the *intermediate* nodes. Expanding it hop by
-      hop is worth the trouble — in a two-hop answer the middle node is very
-      often the thing being asked about, and collapsing the path to its
-      endpoints throws it away.
+    * A **variable-length path** comes back as ``{"_nodes": [...], "_rels": [...]}``.
+      Expanding it hop by hop is worth the trouble — in a two-hop answer the
+      middle node is very often the thing being asked about, and collapsing the
+      path to its endpoints throws it away. What ``_nodes`` holds depends on
+      what the query bound; :func:`_path_triples` sorts that out.
     * A **single relationship** is one dict of properties.
     * A **generated query** returns plain columns.
     """
     if len(row) == 3 and isinstance(row[1], dict) and "_rels" in row[1]:
-        return _path_triples(str(row[0]), row[1], str(row[2]))
+        return _path_triples(row[1], start=str(row[0]), end=str(row[2]))
 
     if len(row) == 3 and isinstance(row[1], dict):
         return [_triple(str(row[0]), row[1], str(row[2]))]
@@ -437,41 +444,81 @@ def _triples_from_row(row: list[Any]) -> list[Triple]:
     return []
 
 
-def _path_triples(start: str, path: dict, end: str) -> list[Triple]:
-    """Expand a recursive path into one triple per hop."""
+def _path_triples(path: dict, *, start: str = "", end: str = "") -> list[Triple]:
+    """Expand a recursive path into one triple per hop.
+
+    Kuzu fills ``_nodes`` two different ways, and the only thing that tells
+    them apart is counting. For a path of ``n`` hops:
+
+    * a bound **path variable** — ``MATCH p = (a)-[:CONNECTS_TO*1..3]-(b)
+      RETURN p`` (or ``RETURN a.name, p, b.name``) — gives ``n + 1`` nodes: the
+      whole walk, endpoints included.
+    * a bound **recursive relationship** — ``MATCH (a)-[r:CONNECTS_TO*1..3]->(b)
+      RETURN a.name, r, b.name``, which is what :meth:`GraphStore.neighbours`
+      runs — gives ``n - 1``: only the nodes *between* the endpoints, which
+      arrive separately as ``start`` and ``end``.
+
+    Both reach here as ``(name, dict, name)`` rows, so both have to be handled.
+    Reading one as the other shifts every hop by a node: a single-hop path
+    variable expanded on the intermediate rule yields ``[a, a, b, b]``, whose
+    first hop is a self-loop that is not in the graph.
+
+    Direction comes from the edge, never from the walk. An undirected match
+    crosses ``(a)-[:CONNECTS_TO*1..3]-(b)`` in whatever order suits the
+    traversal, so a hop's position in ``_nodes`` says nothing about which way
+    its edge points — reconstructing from position alone reports "Rotterdam
+    LOCATED_IN Fabrikam Freight" for a graph that says the opposite. ``_src``
+    and ``_dst`` settle it; where the ids are missing, walk order is all there
+    is to go on.
+
+    A walk that revisits a node is kept rather than dropped. It is redundant,
+    not wrong — ``*1..3`` between two adjacent entities happily returns
+    A→B→A→B — and :func:`_dedupe` already collapses the repeats, whereas
+    dropping the walk would also discard the real edges of a genuine cycle.
+    """
     rels = path.get("_rels") or []
-    intermediate = [str(node.get("name", "")) for node in (path.get("_nodes") or [])]
-    names = [start, *intermediate, end]
+    nodes = path.get("_nodes") or []
+    if not rels:
+        return []
+
+    names = [str(node.get("name", "")) for node in nodes]
+    ids = [node.get("_id") for node in nodes]
+
+    if len(nodes) == len(rels) + 1:  # a path variable: the whole walk
+        walk, walk_ids = names, ids
+    elif len(nodes) == len(rels) - 1:  # a recursive rel: intermediates only
+        walk, walk_ids = [start, *names, end], [None, *ids, None]
+    else:  # neither convention fits; guessing would invent edges
+        return []
 
     triples: list[Triple] = []
     for index, rel in enumerate(rels):
         if not isinstance(rel, dict):
             continue
-        source = names[index] if index < len(names) else start
-        target = names[index + 1] if index + 1 < len(names) else end
+        source, target = walk[index], walk[index + 1]
+        source_id, target_id = walk_ids[index], walk_ids[index + 1]
+        if _points_backwards(rel, source_id, target_id):
+            source, target = target, source
         triples.append(_triple(source, rel, target))
     return triples
 
 
-def _walk_triples(path: dict) -> list[Triple]:
-    """One triple per hop of a directed path.
+def _points_backwards(rel: dict, source_id: Any, target_id: Any) -> bool:
+    """Whether this edge points against the direction the walk crossed it.
 
-    Kuzu returns ``_nodes`` for a recursive path with **every** node on it,
-    endpoints included, so hop *i* runs from ``_nodes[i]`` to ``_nodes[i+1]``.
-    A walk that revisits a node is dropped: ``*1..3`` between two adjacent
-    entities happily returns A→B→A→B, which says nothing the single hop did not.
+    Evidence that it runs forwards wins, so a self-loop — where both ends match
+    — is left alone.
     """
-    nodes = [str(node.get("name", "")) for node in (path.get("_nodes") or [])]
-    rels = path.get("_rels") or []
-
-    if len(nodes) != len(rels) + 1 or len(set(nodes)) != len(nodes):
-        return []
-
-    return [
-        _triple(nodes[index], rel, nodes[index + 1])
-        for index, rel in enumerate(rels)
-        if isinstance(rel, dict)
-    ]
+    src, dst = rel.get("_src"), rel.get("_dst")
+    if src is not None and src == source_id:
+        return False
+    if dst is not None and dst == target_id:
+        return False
+    if src is not None and src == target_id:
+        return True
+    if dst is not None and dst == source_id:
+        return True
+    return False
 
 
 def _triple(source: str, rel: dict, target: str) -> Triple:

@@ -503,3 +503,116 @@ def test_a_short_document_is_still_one_call(fake_backend, monkeypatch):
     backend = fake_backend({"entities": [], "relationships": []})
     GraphExtractor(backend=backend, cache=GraphCache()).extract("a short sentence")
     assert backend.calls == 1
+
+
+# --------------------------------------------------------------------------- #
+# Reconstructing a variable-length path
+# --------------------------------------------------------------------------- #
+
+#: Two hops in a straight line, so that "the middle node" and "the endpoints"
+#: are different answers and a shifted expansion cannot pass by luck.
+CHAIN = (
+    [_entity("Northwind Logistics", type="Organization"),
+     _entity("Fabrikam Freight", type="Organization"),
+     _entity("Rotterdam", type="Place")],
+    [_rel("Northwind Logistics", "Fabrikam Freight", "ACQUIRED"),
+     _rel("Fabrikam Freight", "Rotterdam", "LOCATED_IN")],
+)
+
+CHAIN_EDGES = {
+    ("Northwind Logistics", "ACQUIRED", "Fabrikam Freight"),
+    ("Fabrikam Freight", "LOCATED_IN", "Rotterdam"),
+}
+
+
+def _edges(triples) -> set[tuple[str, str, str]]:
+    return {(t.source, t.relation, t.target) for t in triples}
+
+
+def test_a_bound_path_gives_the_hops_not_a_self_loop(graph: GraphStore):
+    """``RETURN a.name, p, b.name`` puts *both* endpoints in ``_nodes``.
+
+    Expanded on the intermediate-node rule, a single hop became
+    ``[a, a, b, b]`` — a self-loop the graph does not contain, followed by the
+    edge read backwards.
+    """
+    graph.upsert(*CHAIN)
+    triples = graph.execute_read(
+        "MATCH p = (a:Entity)-[:CONNECTS_TO*1..1]-(b:Entity) "
+        "WHERE a.name = 'Northwind Logistics' AND b.name = 'Fabrikam Freight' "
+        "RETURN a.name, p, b.name"
+    )
+    assert _edges(triples) == {("Northwind Logistics", "ACQUIRED", "Fabrikam Freight")}
+
+
+def test_a_longer_bound_path_invents_no_edges(graph: GraphStore):
+    """``*1..3`` between adjacent nodes also walks the detour out and back.
+
+    Those repeats are redundant rather than wrong, so they are kept and
+    deduplicated; what must never appear is an edge the graph does not hold.
+    """
+    graph.upsert(*CHAIN)
+    triples = graph.execute_read(
+        "MATCH p = (a:Entity)-[:CONNECTS_TO*1..3]-(b:Entity) "
+        "WHERE a.name = 'Northwind Logistics' AND b.name = 'Fabrikam Freight' "
+        "RETURN a.name, p, b.name"
+    )
+    assert ("Northwind Logistics", "ACQUIRED", "Fabrikam Freight") in _edges(triples)
+    assert _edges(triples) <= CHAIN_EDGES
+
+
+def test_a_bound_path_keeps_the_middle_node_of_two_hops(graph: GraphStore):
+    graph.upsert(*CHAIN)
+    triples = graph.execute_read(
+        "MATCH p = (a:Entity)-[:CONNECTS_TO*1..3]-(b:Entity) "
+        "WHERE a.name = 'Northwind Logistics' AND b.name = 'Rotterdam' "
+        "RETURN a.name, p, b.name"
+    )
+    assert _edges(triples) == CHAIN_EDGES
+
+
+def test_walking_a_path_backwards_does_not_reverse_the_facts(graph: GraphStore):
+    """An undirected match may cross an edge against the way it points.
+
+    Reading direction off the walk turns "Fabrikam Freight is located in
+    Rotterdam" into the reverse, which is worse than returning nothing.
+    """
+    graph.upsert(*CHAIN)
+    triples = graph.execute_read(
+        "MATCH p = (a:Entity)-[:CONNECTS_TO*1..3]-(b:Entity) "
+        "WHERE a.name = 'Rotterdam' AND b.name = 'Northwind Logistics' "
+        "RETURN a.name, p, b.name"
+    )
+    assert _edges(triples) == CHAIN_EDGES
+
+
+def test_a_bound_recursive_relationship_still_expands(graph: GraphStore):
+    """The other convention: ``_nodes`` holds only what is between the ends.
+
+    :meth:`GraphStore.neighbours` runs exactly this shape, so it is the half
+    that must not break while the path-variable half is fixed.
+    """
+    graph.upsert(*CHAIN)
+    triples = graph.execute_read(
+        "MATCH (a:Entity)-[r:CONNECTS_TO*1..3]->(b:Entity) "
+        "WHERE a.name = 'Northwind Logistics' AND b.name = 'Rotterdam' "
+        "RETURN a.name, r, b.name"
+    )
+    assert _edges(triples) == CHAIN_EDGES
+
+
+def test_path_returns_every_hop_between_two_entities(graph: GraphStore):
+    graph.upsert(*CHAIN)
+    assert _edges(graph.path("Northwind Logistics", "Rotterdam")) == CHAIN_EDGES
+
+
+def test_a_path_shape_that_matches_neither_convention_is_dropped(graph: GraphStore):
+    """Node and hop counts that fit no rule mean the row cannot be read.
+
+    Guessing an alignment here would emit edges nobody stored.
+    """
+    from pipeline.graph.store import _path_triples
+
+    nonsense = {"_nodes": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
+                "_rels": [{"relation": "X"}, {"relation": "Y"}, {"relation": "Z"}]}
+    assert _path_triples(nonsense, start="A", end="C") == []
