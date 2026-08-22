@@ -183,6 +183,41 @@ class SearchRequest(BaseModel):
         return value
 
 
+class InvestigateRequest(BaseModel):
+    """A question for the agent loop, and what it is allowed to do about it."""
+
+    question: str = Field(..., min_length=1, description="A question, in plain language.")
+    allow_network: bool = Field(
+        False,
+        description=(
+            "Let the run reach the outside world when the corpus falls short. "
+            "Off by default: fetching is the caller's decision, never the "
+            "model's."
+        ),
+    )
+    allow_write: bool = Field(
+        False,
+        description=(
+            "Let the run add what it fetched to the corpus. Needed for "
+            "acquisition to do anything, since fetching without indexing "
+            "changes nothing."
+        ),
+    )
+    max_rounds: Optional[int] = Field(
+        None, ge=1, le=5,
+        description="Rounds of specialist-then-synthesis. null follows AGENT_MAX_ROUNDS.",
+    )
+    verify: Optional[bool] = Field(
+        None,
+        description=(
+            "Check each sentence against the passages it rests on. Catches ~82% "
+            "of unsupported claims and flags ~29% of supported ones wrongly, so "
+            "it annotates rather than deletes. null follows AGENT_VERIFY."
+        ),
+    )
+    local_only: bool = Field(False, description="Never send anything to a hosted model.")
+
+
 class BatchRequest(BaseModel):
     urls: list[str] = Field(..., min_length=1, max_length=1000)
     prompt: str = Field(..., min_length=1)
@@ -271,7 +306,7 @@ def health() -> dict[str, Any]:
         import redis
 
         client = redis.Redis.from_url(config.REDIS_URL)
-        for queue in (config.IO_QUEUE, config.CPU_QUEUE):
+        for queue in (config.IO_QUEUE, config.CPU_QUEUE, config.AGENTS_QUEUE):
             queues[queue] = int(client.llen(queue))
         redis_ok = True
     except Exception:
@@ -664,6 +699,63 @@ def graph_entities(limit: int = Query(100, ge=1, le=1000)) -> dict:
             }
     except Exception as exc:
         return {"available": False, "error": str(exc)}
+
+
+@app.post("/api/v1/investigate", tags=["retrieve"], status_code=202)
+def investigate_endpoint(request: InvestigateRequest) -> dict:
+    """Queue an investigation: retrieve, judge whether that was enough, repeat.
+
+    Queued rather than answered inline. A run is half a minute to two minutes of
+    model calls, and holding an HTTP worker open for that is how a server with
+    four of them stops answering anything else.
+    """
+    from tasks import investigate
+
+    try:
+        task = investigate.delay(
+            request.question,
+            allow_network=request.allow_network,
+            allow_write=request.allow_write,
+            max_rounds=request.max_rounds,
+            verify=request.verify,
+            local_only=request.local_only,
+        )
+    except Exception as exc:
+        raise HTTPException(503, f"could not reach the task broker ({exc})") from exc
+
+    log.info(
+        "api.investigate",
+        question=request.question[:80],
+        network=request.allow_network,
+        write=request.allow_write,
+    )
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "poll": f"/api/v1/investigations/{task.id}",
+    }
+
+
+@app.get("/api/v1/investigations/{task_id}", tags=["retrieve"])
+def investigation_status(task_id: str) -> dict:
+    """Progress while it runs, the answer and its reasoning when it is done."""
+    result = AsyncResult(task_id, app=celery_app)
+    status = result.status
+    response: dict[str, Any] = {"task_id": task_id, "status": status, "done": False}
+
+    if status == "PROGRESS":
+        response["progress"] = result.info if isinstance(result.info, dict) else {}
+        return response
+
+    if not result.ready():
+        return response
+
+    response["done"] = True
+    if result.successful():
+        response["result"] = result.result
+    else:
+        response["error"] = str(result.result)
+    return response
 
 
 @app.get("/api/v1/tasks/{task_id}", tags=["extract"])

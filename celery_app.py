@@ -95,6 +95,10 @@ celery_app.conf.update(
         "tasks.index_*": {"queue": config.CPU_QUEUE},
         # Retrieval embeds the query and may load a cross-encoder. Same reason.
         "tasks.search": {"queue": config.CPU_QUEUE},
+        # An investigation is minutes of waiting on model calls, punctuated by
+        # retrieval. On io it would starve page fetches; on cpu it would block
+        # behind a transcription. Its own queue, on the threads pool.
+        "tasks.investigate": {"queue": config.AGENTS_QUEUE},
     },
 
     # --- limits ----------------------------------------------------------- #

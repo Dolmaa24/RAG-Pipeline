@@ -101,6 +101,7 @@ class Supervisor:
         verify_answer: Optional[bool] = None,
         backend=None,
         answerer=None,
+        on_progress=None,
     ) -> None:
         self.budget = budget or Budget.from_config()
         self.local_only = local_only
@@ -114,6 +115,10 @@ class Supervisor:
         )
         self._backend = backend
         self._answerer = answerer
+        #: Called with one dict per completed step. A run takes half a minute
+        #: or more; without this the caller watches a spinner and cannot tell a
+        #: slow graph query from a hung model.
+        self._on_progress = on_progress
         self._graph = self._build()
 
     # ------------------------------------------------------------------ #
@@ -173,12 +178,25 @@ class Supervisor:
             f"{', '.join(leads[:6])}"
         )
 
+        self._report({
+            "stage": "gather",
+            "role": role.name,
+            "round": state.get("rounds", 0) + 1,
+            "task": task,
+        })
         result = loop.run(prompt)
         self._spend.iterations += result.spend.iterations if result.spend else 0
         self._spend.tool_calls += result.spend.tool_calls if result.spend else 0
         self._warnings.extend(result.warnings)
 
         found = _leads_from(result.trace)
+        self._report({
+            "stage": "gathered",
+            "role": role.name,
+            "round": state.get("rounds", 0) + 1,
+            "tools": result.tools_used,
+            "stopped": result.stopped,
+        })
         return {
             **state,
             "rounds": state.get("rounds", 0) + 1,
@@ -205,9 +223,16 @@ class Supervisor:
         needed, already built and already tested.
         """
         question = state.get("focus") or state["question"]
+        self._report({"stage": "synthesising", "round": state.get("rounds", 0)})
         started = time.perf_counter()
         reply = self._answer(question)
         elapsed = time.perf_counter() - started
+        self._report({
+            "stage": "synthesised",
+            "round": state.get("rounds", 0),
+            "sufficient": reply.sufficient,
+            "sources": len(reply.sources),
+        })
 
         sources = [source.to_dict() for source in reply.sources]
         return {
@@ -308,6 +333,7 @@ class Supervisor:
 
         verdict = None
         if self.verify_answer and final.get("answer"):
+            self._report({"stage": "verifying"})
             verdict = verify(
                 final["answer"],
                 final.get("passages", []),
@@ -338,6 +364,16 @@ class Supervisor:
         )
         metrics.incr("agents.supervisor.runs")
         return result
+
+
+    def _report(self, event: dict[str, Any]) -> None:
+        """Progress is best-effort. A broken reporter must not fail a run."""
+        if self._on_progress is None:
+            return
+        try:
+            self._on_progress(event)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.debug("agents.supervisor.progress_failed", error=repr(exc))
 
 
 def _leads_from(trace: list[dict[str, Any]]) -> list[str]:

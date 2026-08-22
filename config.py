@@ -190,6 +190,11 @@ class EngineConfig(BaseSettings):
     #: rather than a deletion, but the false-alarm rate is high enough that it
     #: is a setting rather than a fact of the system.
     AGENT_VERIFY: bool = True
+    #: How much reaching-out an investigation gets when the caller allows it.
+    #: Small on purpose: fetching is a last resort after the corpus came up
+    #: short, not a strategy.
+    AGENT_NETWORK_CALLS: int = 4
+    AGENT_WRITE_CALLS: int = 2
     AI_TIMEOUT: float = 300.0
     #: How long Ollama keeps the model resident after a call. Its own default is
     #: 5 minutes, so an intermittent pipeline pays a measured ~2.2s reload on
@@ -233,6 +238,11 @@ class EngineConfig(BaseSettings):
 
     IO_QUEUE: str = "io"
     CPU_QUEUE: str = "cpu"
+    #: Investigations get their own queue. A ninety-second agent run on the io
+    #: pool would sit in a thread sixteen page fetches are queued behind, and
+    #: its profile — almost entirely waiting on model calls — is the io pool's,
+    #: not the cpu pool's. Neither existing queue is right.
+    AGENTS_QUEUE: str = "agents"
 
     # ------------------------------------------------------------------ #
     # Phase 5 — trust

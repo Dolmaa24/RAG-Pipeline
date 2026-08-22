@@ -683,6 +683,65 @@ def _build_graph(
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# Investigations: the agent loop, on its own queue
+# --------------------------------------------------------------------------- #
+
+
+@celery_app.task(bind=True, name="tasks.investigate")
+def investigate(
+    self,
+    question: str,
+    *,
+    allow_network: bool = False,
+    allow_write: bool = False,
+    max_rounds: Optional[int] = None,
+    verify: Optional[bool] = None,
+    local_only: bool = False,
+) -> dict:
+    """Answer one question with the agent loop, and report the reasoning.
+
+    No ``RETRY_KWARGS``. Retrying is for work whose failure was the network's
+    fault; an investigation that failed has already spent its budget on model
+    calls, and running it again would spend the same again for the same reason.
+
+    ``allow_network`` and ``allow_write`` become the budget's counters, which
+    are also its permission gate — an unbudgeted effect is not merely capped,
+    its tools are absent from what the model is shown.
+    """
+    with job_context(self.request.id, question[:80]):
+        from pipeline.agents.budget import Budget
+        from pipeline.agents.supervisor import Supervisor
+
+        base = Budget.from_config()
+        budget = Budget(
+            max_iterations=base.max_iterations,
+            max_tool_calls=base.max_tool_calls,
+            max_seconds=base.max_seconds,
+            max_tokens=base.max_tokens,
+            network_calls=config.AGENT_NETWORK_CALLS if allow_network else 0,
+            write_calls=config.AGENT_WRITE_CALLS if allow_write else 0,
+        )
+
+        def report(event: dict) -> None:
+            self.update_state(state="PROGRESS", meta=event)
+
+        try:
+            result = Supervisor(
+                budget=budget,
+                local_only=local_only,
+                max_rounds=max_rounds,
+                verify_answer=verify,
+                on_progress=report,
+            ).investigate(question)
+            return result.to_dict()
+        except SoftTimeLimitExceeded:
+            log.error("task.soft_timeout", task="tasks.investigate")
+            raise
+        finally:
+            gc.collect()
+
+
 @celery_app.task(bind=True, name="tasks.process_web_scrape", **RETRY_KWARGS)
 def process_web_scrape_task(
     self, url: str, prompt: str, schema: dict, force_dynamic: bool = False

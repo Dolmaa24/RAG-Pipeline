@@ -4,6 +4,7 @@
 #   ./run.sh              # everything: both workers, API, dashboard
 #   ./run.sh worker-io    # I/O worker only (threads, high concurrency)
 #   ./run.sh worker-cpu   # CPU/GPU worker only (Whisper, LLM, Chromium)
+#   ./run.sh worker-agents # investigation worker only (threads, model calls)
 #   ./run.sh mcp          # MCP server over stdio (add --http for the HTTP one)
 #   ./run.sh api
 #   ./run.sh dashboard
@@ -57,6 +58,18 @@ worker_cpu() {
     --hostname=cpu@%h --loglevel=info
 }
 
+worker_agents() {
+  # Threads, not prefork. An investigation holds model clients and a thread
+  # pool, which is exactly the shape that trips the prefork pool's four-second
+  # startup handshake and macOS's refusal to let Metal survive fork(). Both are
+  # already scars in this codebase. Concurrency is low because each run is
+  # minutes of model calls, and two at once on 8 GB is contention.
+  check_redis
+  exec "$VENV/celery" -A celery_app worker \
+    --queues=agents --pool=threads --concurrency=2 \
+    --hostname=agents@%h --loglevel=info
+}
+
 api()       { exec "$VENV/uvicorn" app:app --host 127.0.0.1 --port 8000 --reload; }
 # Not part of `all`: an MCP client spawns its own copy over stdio, and a
 # long-lived one is only wanted for the HTTP transport.
@@ -67,8 +80,9 @@ flower()    { check_redis; exec "$VENV/celery" -A celery_app flower --port=5555;
 all() {
   check_redis
   trap 'kill 0' EXIT INT TERM   # one Ctrl-C stops the whole stack
-  "$0" worker-io  & sleep 1
-  "$0" worker-cpu & sleep 1
+  "$0" worker-io     & sleep 1
+  "$0" worker-cpu    & sleep 1
+  "$0" worker-agents & sleep 1
   "$0" api        & sleep 2
   "$0" dashboard  &
   echo
@@ -83,10 +97,11 @@ all() {
 case "${1:-all}" in
   worker-io)  worker_io ;;
   worker-cpu) worker_cpu ;;
+  worker-agents) worker_agents ;;
   api)        api ;;
   dashboard)  dashboard ;;
   flower)     flower ;;
   mcp)        shift; mcp "$@" ;;
   all)        all ;;
-  *) echo "usage: $0 [all|worker-io|worker-cpu|api|dashboard|flower|mcp]" >&2; exit 2 ;;
+  *) echo "usage: $0 [all|worker-io|worker-cpu|worker-agents|api|dashboard|flower|mcp]" >&2; exit 2 ;;
 esac

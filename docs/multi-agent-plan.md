@@ -629,7 +629,7 @@ unsupported. The answer is true and the system still declines to vouch for it,
 which is exactly the distinction the verifier's prompt is built on: not whether
 a claim is true, but whether these passages say it.
 
-## Phase 05 — Surfaces (~2 days)
+## Phase 05 — Surfaces ✅ shipped
 
 - **A third queue.** `tasks.investigate` routes to a new `agents` queue, not to
   `io` or `cpu`. A ninety-second agent run sitting in the `io` pool would starve
@@ -645,6 +645,46 @@ a claim is true, but whether these passages say it.
 Show the trace by default rather than behind an expander. A multi-agent system
 whose reasoning you cannot watch is one you cannot debug, and the trace is the
 most interesting thing on the screen.
+
+### As built
+
+All three, as described, plus a progress hook on the supervisor — without which
+the poller reports "PENDING" for thirty-five seconds and a slow graph query is
+indistinguishable from a hung model. `/health` reports the third queue too.
+
+The task takes no `RETRY_KWARGS`. Retrying is for work the network broke; an
+investigation that failed has already spent its budget on model calls and would
+spend it again the same way.
+
+Verified end to end through HTTP and the real queue:
+
+```
+POST /api/v1/investigate         -> 202, task 556b5f2a
+GET  /api/v1/investigations/...  -> gather corpus · synthesising · verifying
+                                 -> answered, 1 round, sufficient, 36.8s
+
+  [corpus]     graph_neighbors{"entity": "Acme Corporation", hops: 2}   13151ms
+               search_corpus{"query": "acquisition and quarterly revenue"} 13150ms
+  [synthesis]  7 sources, sufficient                                     8.4s
+  verified     2 sentences, 0 flagged
+```
+
+Both tool calls came back at 13.1s within a millisecond of each other, which is
+the parallel dispatch from phase 03 doing its job — the model emitted both in
+one turn and they ran together. It also shows what that is worth here: 13s for
+both, against roughly 12s + 1s sequentially, because they contend for the same
+embedder and the same disk. Parallelism helps when the legs are independent, and
+these are not as independent as they look.
+
+### The one thing that did not get fixed
+
+`graph_neighbors` is still ~13s per call, and it is now the largest single cost
+in an investigation. Kuzu opens and the entity index loads on every invocation,
+which is deliberate — Kuzu's lock is process-wide, and a cached read handle in
+the agents worker would block the ingest worker from ever writing. Fixing it
+properly means either a read-only replica of the graph, or moving graph queries
+behind the API process that already holds a handle. Both are real work and
+neither belongs in a surfaces phase.
 
 ---
 

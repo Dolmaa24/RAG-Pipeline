@@ -85,7 +85,7 @@ with st.sidebar:
         st.caption("Build one with 'Knowledge graph' on.")
 
 # Main Interface
-extract_tab, search_tab = st.tabs(["Extract", "Search"])
+extract_tab, search_tab, investigate_tab = st.tabs(["Extract", "Search", "Investigate"])
 
 with extract_tab:
     left, right = st.columns([1, 1])
@@ -498,3 +498,165 @@ with search_tab:
             with st.expander("Timings and raw response"):
                 st.json({"timings_ms": timings, "plan": plan})
                 st.json(result)
+
+
+# --------------------------------------------------------------------------- #
+# Investigate
+# --------------------------------------------------------------------------- #
+
+with investigate_tab:
+    st.subheader("Investigate")
+    st.caption(
+        "Search once, judge whether that was enough, and go back for what was "
+        "missing. Slower than Search — half a minute or more — and the reason "
+        "to use it is a question with two parts."
+    )
+
+    question = st.text_input(
+        "Question", "",
+        placeholder="What did Acme acquire, and what was the quarterly revenue?",
+        key="investigate_question", label_visibility="collapsed",
+    )
+
+    with st.expander("What it may do", expanded=False):
+        rounds = st.slider(
+            "Rounds", 1, 5, 2,
+            help="One round is a specialist plus a synthesis call. The second "
+                 "is where a two-part answer comes from; a third rarely adds "
+                 "evidence the second did not.",
+        )
+        do_verify = st.checkbox(
+            "Check the answer against its sources", value=True,
+            help="Catches about 82% of unsupported claims, and wrongly flags "
+                 "about 29% of supported ones. It marks sentences rather than "
+                 "removing them.",
+        )
+        st.caption("Reaching outside the corpus")
+        allow_network = st.checkbox(
+            "May fetch a URL in the question", value=False,
+            help="Only used after the corpus has been tried and come up short.",
+        )
+        allow_write = st.checkbox(
+            "May add what it fetched to the corpus", value=False,
+            help="Fetching without indexing changes nothing, so acquisition "
+                 "needs both.",
+        )
+
+    if st.button("Investigate", type="primary", use_container_width=True, key="go_investigate"):
+        if not question.strip():
+            st.warning("Ask a question first.")
+            st.stop()
+
+        queued = api_post(
+            "/api/v1/investigate",
+            {
+                "question": question,
+                "allow_network": bool(allow_network),
+                "allow_write": bool(allow_write),
+                "max_rounds": int(rounds),
+                "verify": bool(do_verify),
+            },
+            timeout=20,
+        )
+        if queued is None:
+            st.stop()
+
+        status_box = st.empty()
+        began = time.time()
+        payload = None
+
+        while time.time() - began < POLL_TIMEOUT:
+            state = api_get(f"/api/v1/investigations/{queued['task_id']}")
+            if state is None:
+                break
+            if state.get("done"):
+                payload = state.get("result")
+                if state.get("error"):
+                    st.error(state["error"])
+                break
+
+            step = state.get("progress") or {}
+            stage = step.get("stage", state.get("status", "queued"))
+            detail = step.get("role") or step.get("tools") or ""
+            status_box.info(
+                f"{stage}"
+                + (f" · round {step['round']}" if step.get("round") else "")
+                + (f" · {detail}" if detail else "")
+                + f" · {int(time.time() - began)}s"
+            )
+            time.sleep(POLL_INTERVAL)
+
+        if payload:
+            status_box.empty()
+
+            if payload.get("sufficient"):
+                st.success("Answered from the corpus.")
+            else:
+                st.warning(
+                    "The corpus did not fully cover this. The answer below is "
+                    "what could be supported; treat the rest as unverified."
+                )
+
+            st.markdown(payload.get("answer") or "_No answer was produced._")
+
+            check = payload.get("verification") or {}
+            if check.get("skipped"):
+                st.caption(f"Not checked: {check.get('reason', 'unknown')}")
+            elif check:
+                flagged = len(check.get("unsupported") or [])
+                if flagged:
+                    st.caption(
+                        f"{flagged} of {check['checked']} sentences are not "
+                        "supported by the passages, and are marked [unsupported]."
+                    )
+                else:
+                    st.caption(
+                        f"All {check['checked']} sentences are supported by the "
+                        "passages cited."
+                    )
+
+            a, b, c, d = st.columns(4)
+            a.metric("Rounds", payload.get("rounds", 0))
+            b.metric("Sources", len(payload.get("sources") or []))
+            c.metric("Seconds", payload.get("seconds", 0))
+            d.metric("Ended", payload.get("stopped", ""))
+
+            # Shown, not hidden behind an expander. For a system whose selling
+            # point is the reasoning, the reasoning is the interesting part of
+            # the screen.
+            st.markdown("#### What it did")
+            for step in payload.get("trace") or []:
+                if step.get("kind") == "specialist":
+                    tools = ", ".join(step.get("tools") or []) or "no tools"
+                    st.markdown(
+                        f"**{step['role']}** — {tools}  \n"
+                        f"<span style='color:#888'>ended: {step.get('stopped','')}</span>",
+                        unsafe_allow_html=True,
+                    )
+                    for inner in step.get("steps") or []:
+                        if inner.get("kind") == "tool":
+                            ok = "ok" if inner.get("ok") else "failed"
+                            st.code(
+                                f"{inner['tool']}({json.dumps(inner.get('arguments', {}))})"
+                                f"  -> {ok}, {inner.get('duration_ms', 0):.0f}ms\n"
+                                f"{(inner.get('observation') or '')[:400]}",
+                                language="text",
+                            )
+                else:
+                    st.markdown(
+                        f"**synthesis** — {step.get('sources', 0)} sources, "
+                        f"sufficient: {step.get('sufficient')}, "
+                        f"{step.get('seconds', 0)}s"
+                    )
+
+            if payload.get("sources"):
+                st.markdown("#### Sources")
+                for source in payload["sources"]:
+                    st.markdown(
+                        f"**[{source.get('number')}]** `{source.get('origin', '')}`"
+                    )
+                    st.caption((source.get("text") or "")[:300])
+
+            if payload.get("warnings"):
+                for warning in payload["warnings"]:
+                    st.caption(f"warning: {warning}")

@@ -718,7 +718,50 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | `GET /api/v1/stats` | Tier breakdown, cache hit rates, breaker state. |
 | `GET /api/v1/specs` | The selector specs learned per domain. |
 | `POST /api/v1/answer` | Ask a question; get an answer that cites its sources. |
+| `POST /api/v1/investigate` | Ask a harder one; the agent loop searches, judges whether that was enough, and goes back for what was missing. |
+| `GET /api/v1/investigations/{id}` | Progress while it runs, then the answer and the reasoning. |
 | `GET /health` | Workers, queue depth, Redis, Mongo, both LLM backends. |
+
+## Investigations
+
+`POST /api/v1/answer` retrieves once and answers. That is the right shape for
+most questions and takes a few seconds.
+
+A question with two parts often needs two searches, where the second depends on
+what the first turned up — and nothing in a single-shot answer notices that the
+first was not enough. `POST /api/v1/investigate` runs the agent loop instead:
+a specialist searches the corpus and the graph, an answer is drafted, and the
+draft's own `sufficient` flag decides whether to go back out with what was
+found. Half a minute rather than five seconds, so use it when the question
+earns it.
+
+```bash
+curl -X POST localhost:8000/api/v1/investigate -H 'Content-Type: application/json' -d '{
+  "question": "What did Acme acquire, and what was the quarterly revenue?"
+}'
+```
+
+Then poll `/api/v1/investigations/{id}` — it reports which stage is running
+while it works, and returns the answer, its sources, the verification result and
+the full trace of every tool call when it finishes. The dashboard's **Investigate**
+tab does the same and shows the trace as it goes.
+
+Investigations run on their own `agents` queue, started by `./run.sh` along with
+everything else. A ninety-second run on the `io` queue would sit in a thread
+sixteen page fetches are waiting behind.
+
+**Reaching outside the corpus is off by default.** `allow_network` lets a run
+fetch a URL named in the question once the corpus has come up short, and
+`allow_write` lets it index what it fetched — both are needed for either to do
+anything, since fetching without indexing changes nothing. Neither is ever
+turned on by the model.
+
+**The answer is checked against its own sources**, and sentences the passages do
+not support are marked `[unsupported]` rather than removed. Measured at 82% of
+unsupported claims caught and 29% of supported sentences flagged wrongly
+(`bench/verify.py`), which is why it annotates rather than deletes — and why
+`AGENT_VERIFY=false` is there if the false alarms bother you more than the
+misses.
 
 ## MCP: using the corpus from Claude Desktop or Claude Code
 
