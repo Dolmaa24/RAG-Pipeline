@@ -720,6 +720,8 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | `POST /api/v1/answer` | Ask a question; get an answer that cites its sources. |
 | `POST /api/v1/investigate` | Ask a harder one; the agent loop searches, judges whether that was enough, and goes back for what was missing. |
 | `GET /api/v1/investigations/{id}` | Progress while it runs, then the answer and the reasoning. |
+| `POST /api/v1/ask` | Either of the two, chosen by the question's shape. |
+| `GET /api/v1/route` | Which path a question would take, without taking it. |
 | `GET /health` | Workers, queue depth, Redis, Mongo, both LLM backends. |
 
 ## Investigations

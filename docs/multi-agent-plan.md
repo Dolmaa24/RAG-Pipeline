@@ -910,7 +910,23 @@ are within a case of each other, at four times the latency.
 
 That is a narrower claim than this plan implied throughout, and it is the honest
 one: **route to an investigation when a question asks *which* or *how many*, and
-answer everything else directly.** Nothing in the system does that routing yet.
+answer everything else directly.**
+
+`pipeline/agents/route.py` does that, from the question's own words and without
+a model call — paying a model to decide whether to pay for a model is the most
+avoidable latency there is. `POST /api/v1/ask` takes either path and says which
+it took; `GET /api/v1/route` answers the question without taking it; and both
+dashboard tabs say, before the search runs, when the other one would do better.
+
+Being wrong is cheap in one direction and expensive in the other — a genuine
+enumeration on the fast path costs one partial answer, an ordinary question on
+the loop costs twenty seconds of attention every time — so anything
+unrecognised takes the fast path.
+
+The first pattern for "which &lt;plural&gt;" matched *"what **is** the capital"*
+and *"what **was** the revenue"*, because both end in `s`. Two of the
+benchmark's own lookups routed to the twenty-second path. A labelled set of
+twenty questions is what found it, and `tests/test_route.py` is that set.
 
 ### Three things the benchmark found that no component test could
 

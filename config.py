@@ -190,6 +190,12 @@ class EngineConfig(BaseSettings):
     #: rather than a deletion, but the false-alarm rate is high enough that it
     #: is a setting rather than a fact of the system.
     AGENT_VERIFY: bool = True
+    #: Send set-shaped questions ("which acquisitions", "how many suppliers")
+    #: to the agent loop and answer the rest directly. Measured: the loop
+    #: scores 3/3 against 1/3 on those and is within a case elsewhere, at four
+    #: times the latency — so routing is where its value is, and off means
+    #: every /api/v1/answer question takes the fast path as before.
+    AGENT_ROUTE_ENUMERATION: bool = True
     #: Which backend checks the answer. None follows LLM_BACKEND, which means
     #: the local model. Paraphrase is where a 3B fails: it rejects "Priya Raman
     #: leads the combined group" against "Priya Raman was appointed chief

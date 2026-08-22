@@ -343,3 +343,52 @@ def test_indexing_needs_write_permission():
     call = invoke("index_document", {"text": "x", "source": "s"})
     assert not call.ok
     assert "write" in call.error.lower()
+
+
+# --------------------------------------------------------------------------- #
+# Counts a model expresses in words
+# --------------------------------------------------------------------------- #
+
+
+def _tools_with_a_limit():
+    return [
+        spec
+        for spec in catalog(ALL_EFFECTS)
+        if "limit" in spec.args_model.model_fields
+    ]
+
+
+@pytest.mark.parametrize("spec", _tools_with_a_limit(), ids=lambda s: s.name)
+@pytest.mark.parametrize("word", ["all", "every", "unlimited"])
+def test_every_limit_accepts_the_word_a_model_actually_sends(spec, word):
+    """Across five phrasings of "list the acquisitions", every one sent
+    ``limit: "all"``. The first fix mapped words to 100, which worked for the
+    tools bounded at 100 and left the two bounded at 50 — search_corpus and
+    answer_from_corpus, the most used of the lot — failing exactly as before.
+    Walking the catalog rather than naming tools is what makes this catch the
+    next field that disagrees about its ceiling.
+    """
+    required = {
+        name: "Acme Corporation"
+        for name, field in spec.args_model.model_fields.items()
+        if field.is_required()
+    }
+    model = spec.args_model.model_validate({**required, "limit": word})
+
+    maximum = next(
+        meta.le for meta in spec.args_model.model_fields["limit"].metadata
+        if hasattr(meta, "le")
+    )
+    assert model.limit == maximum
+
+
+@pytest.mark.parametrize("spec", _tools_with_a_limit(), ids=lambda s: s.name)
+def test_a_limit_that_is_not_a_number_or_a_word_is_still_refused(spec):
+    # Tolerance for "all" must not become tolerance for anything.
+    required = {
+        name: "Acme Corporation"
+        for name, field in spec.args_model.model_fields.items()
+        if field.is_required()
+    }
+    with pytest.raises(Exception):
+        spec.args_model.model_validate({**required, "limit": "quite a few"})

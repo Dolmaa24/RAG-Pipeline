@@ -312,6 +312,18 @@ with search_tab:
         label_visibility="collapsed",
     )
 
+    # Said before the search runs, not after. A question asking for a set is
+    # one this tab answers partially — measured at 1/3 against the loop's 3/3 —
+    # and finding that out from a thin answer teaches nothing.
+    if query.strip():
+        advice = api_get("/api/v1/route", question=query)
+        if advice and advice.get("path") == "investigate":
+            st.info(
+                "This question asks for a set of things. Search answers those "
+                "partially — the **Investigate** tab lists them properly, and "
+                "takes about half a minute."
+            )
+
     controls, filters = st.columns([1, 1])
 
     with controls:
@@ -541,6 +553,15 @@ with investigate_tab:
             help="Fetching without indexing changes nothing, so acquisition "
                  "needs both.",
         )
+
+    if question.strip():
+        advice = api_get("/api/v1/route", question=question)
+        if advice and advice.get("path") == "answer":
+            st.caption(
+                "Measured, the loop answers this kind of question no better "
+                "than **Search** does, and takes four times as long. It is "
+                "worth it for questions asking which or how many."
+            )
 
     if st.button("Investigate", type="primary", use_container_width=True, key="go_investigate"):
         if not question.strip():

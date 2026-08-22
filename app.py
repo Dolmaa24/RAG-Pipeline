@@ -653,6 +653,12 @@ def answer(request: SearchRequest) -> dict:
         log.exception("api.answer_failed", query=request.query[:80], error=repr(exc))
         raise HTTPException(500, f"answering failed: {exc}") from exc
 
+    # Advice, not a redirect. This endpoint is synchronous and an investigation
+    # is queued, so escalating here would change what a caller gets back.
+    from pipeline.agents.route import route as route_question
+
+    decision = route_question(request.query)
+
     log.info(
         "api.answer",
         query=request.query[:80],
@@ -660,7 +666,17 @@ def answer(request: SearchRequest) -> dict:
         cited=len(reply.cited),
         ms=reply.timings_ms.get("total"),
     )
-    return reply.to_dict()
+    payload = reply.to_dict()
+    if decision.investigate:
+        # Surfaced rather than acted on: a question shaped like a set is one
+        # this path answers partially, and the caller is the one who can
+        # decide whether the extra twenty seconds is worth it.
+        payload["better_answered_by"] = {
+            "path": "investigate",
+            "reason": decision.reason,
+            "endpoint": "/api/v1/investigate",
+        }
+    return payload
 
 
 @app.get("/api/v1/index/stats", tags=["retrieve"])
@@ -699,6 +715,53 @@ def graph_entities(limit: int = Query(100, ge=1, le=1000)) -> dict:
             }
     except Exception as exc:
         return {"available": False, "error": str(exc)}
+
+
+@app.post("/api/v1/ask", tags=["retrieve"])
+def ask(request: SearchRequest) -> dict:
+    """Answer a question by whichever path suits its shape.
+
+    One entry point for callers who do not want to choose. A question asking
+    for a *set* — "which acquisitions", "how many suppliers", "list every
+    region" — goes to the agent loop, which scored 3/3 on those against 1/3 for
+    answering directly. Everything else is answered directly, where the two are
+    within a case of each other and the direct path is four times faster
+    (`bench/agents.py`).
+
+    The two paths return different shapes, and this does not pretend otherwise:
+    a direct answer comes back complete, an investigation comes back as a task
+    id to poll. ``path`` says which happened and ``reason`` says why, so a
+    caller can handle both without guessing.
+    """
+    from pipeline.agents.route import route as route_question
+
+    decision = route_question(request.query)
+
+    if not decision.investigate:
+        payload = answer(request)
+        payload["path"] = "answer"
+        payload["reason"] = decision.reason
+        return payload
+
+    queued = investigate_endpoint(
+        InvestigateRequest(question=request.query, local_only=request.local_only)
+    )
+    return {**queued, "path": "investigate", "reason": decision.reason}
+
+
+@app.get("/api/v1/route", tags=["retrieve"])
+def route_preview(
+    question: str = Query(..., min_length=1, description="A question, in plain language.")
+) -> dict:
+    """Which path a question would take, without taking it."""
+    from pipeline.agents.route import route as route_question
+
+    decision = route_question(question)
+    return {
+        "question": question,
+        "path": decision.path,
+        "reason": decision.reason,
+    }
 
 
 @app.post("/api/v1/investigate", tags=["retrieve"], status_code=202)
