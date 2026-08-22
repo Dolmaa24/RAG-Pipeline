@@ -409,7 +409,7 @@ the half it is not using is correct, and the schema now says so.
 the Groq path is covered by wire-format tests and nothing else. The first run
 with a real key should be treated as untested code.
 
-## Phase 03 — The loop, and its budget (~3 days, LangGraph)
+## Phase 03 — The loop, and its budget ✅ shipped
 
 `pipeline/agents/loop.py`, built as a LangGraph `StateGraph`. Nodes for *act*
 and *observe*, a conditional edge back to *act* while the model keeps calling
@@ -447,6 +447,64 @@ class Budget:
 **Ships:** a loop that can be driven by a scripted fake backend in tests, with
 budget exhaustion, no-progress detection and parallel dispatch all covered without
 a model running.
+
+### As built
+
+`pipeline/agents/budget.py` and `pipeline/agents/loop.py`: a three-node
+`StateGraph` — *act*, *observe*, *finish* — with no checkpointer, tool execution
+on the registry, and 19 tests that run without a model.
+
+**The budget's counters are the permission gate.** `network_calls=0` does not
+mean "unbudgeted", it means the effect is unavailable and its tools are left out
+of the catalog the model is shown. Keeping "may it?" and "how much?" as one
+number stops them drifting apart, which is what happens when they are two
+settings.
+
+**A third node the plan did not have: *finish*.** Budget exhaustion with nothing
+to show is a wasted minute, and for `qwen2.5:3b` — which never concludes it is
+done — exhaustion is not an edge case but *the* exit. So a run that runs out
+takes one more turn with no tools offered and an instruction to answer from what
+it gathered. Without it that model would reliably produce nothing at all.
+
+**Two bugs the tests caught, both worth naming.** A failed model call returned no
+calls and no text, which is the same shape as a clean answer; the router sent it
+to *observe*, which had nothing to observe, and it looped there until the turn
+budget ran out and reported the wrong reason. And the finishing turn could come
+back empty — a shimmed backend may still emit a call when offered no tools —
+which returned an empty answer indistinguishable from silence.
+
+**The no-progress stop fires before the budget limits, and should.** Written as
+a backstop, it turned out to be the *first* thing to trigger whenever a model
+repeats a call — two identical observations is already enough evidence, and
+waiting for eight turns to conclude the same thing wastes the difference.
+
+### Measured against a real model
+
+`llama3.2:3b`, read-only, against the indexed corpus:
+
+```
+question   What did Acme Corporation acquire, and what was the quarterly revenue?
+turn 0     graph_neighbors{"entity": "Acme Corporation"}          5.0s
+tool       (Acme Corporation)-[ACQUIRED]->(Beta Industries)      11.9s
+turn 2     answers                                                1.4s
+stopped    answered · 2 turns · 1 tool call · 18.4s
+```
+
+It works, and it is half an answer. The model found the acquisition and then
+gave up on the revenue rather than following with `search_corpus`, which would
+have found it — the passage is indexed and a direct search returns it.
+
+**This is the mirror image of the gate's finding, and the two together define
+phase 04's problem.** `qwen2.5:3b` never stops; `llama3.2:3b` stops too early.
+A loop bounded only from above handles the first and not the second, so what
+phase 04 adds is the judgement in between: after each return, is this enough?
+The `sufficient` flag on `answer_question()` already answers exactly that
+question and is the obvious thing to route on.
+
+Also worth noting from that run: `graph_neighbors` took 11.9 seconds against
+5.0 for the model call. Opening Kuzu and loading the entity index per call
+dominates, and at that price the graph leg is the expensive one — the opposite
+of what the tool's 60 ms cost hint claims.
 
 ## Phase 04 — The agents (~4 days, acquisition gated, LangGraph)
 

@@ -63,6 +63,13 @@ uvicorn[standard]==0.52.1
 # publish nested schemas, and small models handle those markedly worse.
 mcp==2.0.0
 
+# --- Agent orchestration ---
+# Graph structure and streaming only. Its checkpointer stays off — Celery owns
+# durability, and two retry models over one job is how work gets done twice —
+# and tool execution stays on pipeline/agents/tools, not LangGraph's ToolNode,
+# so the MCP server and the internal loop keep a single code path.
+langgraph==1.2.11
+
 # --- Storage ---
 pymongo==4.17.0
 

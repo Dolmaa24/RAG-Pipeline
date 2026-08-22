@@ -172,6 +172,13 @@ class EngineConfig(BaseSettings):
     #: run hosted while page content stays local. None means "same as
     #: LLM_BACKEND".
     LLM_AGENT_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
+    #: The agent loop's ceiling. These are not a safety net: the tool-calling
+    #: benchmark found the local models never decide they are finished, so the
+    #: turn limit is what ends a run. See pipeline/agents/budget.py.
+    AGENT_MAX_ITERATIONS: int = 8
+    AGENT_MAX_TOOL_CALLS: int = 20
+    AGENT_MAX_SECONDS: float = 90.0
+    AGENT_MAX_TOKENS: int = 60_000
     AI_TIMEOUT: float = 300.0
     #: How long Ollama keeps the model resident after a call. Its own default is
     #: 5 minutes, so an intermittent pipeline pays a measured ~2.2s reload on
