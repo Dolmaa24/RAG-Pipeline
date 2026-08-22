@@ -506,7 +506,7 @@ Also worth noting from that run: `graph_neighbors` took 11.9 seconds against
 dominates, and at that price the graph leg is the expensive one — the opposite
 of what the tool's 60 ms cost hint claims.
 
-## Phase 04 — The agents (~4 days, acquisition gated, LangGraph)
+## Phase 04 — The agents ✅ shipped
 
 A supervisor delegating to specialists — a star, not a mesh. Two reasons: with a
 small model, fewer decisions per call is strictly better; and a star topology
@@ -543,6 +543,91 @@ not cover the question. It needs a caller, not a rewrite.
 **Ships:** multi-hop questions answered from the corpus with verified citations,
 and — when explicitly allowed — a run that notices the corpus is missing
 something, fetches it, and answers from what it just indexed.
+
+### As built
+
+`roles.py`, `supervisor.py`, `verify.py`, and `bench/verify.py`. 25 tests, none
+of which needs a model: the answerer is injected, so "insufficient, then
+sufficient" is a fixture rather than something to hope for.
+
+**Synthesis and assessment turned out to be one step.** The phase needed
+something to ask *is this enough?* after each round, and `answer_question()`
+already returns an answer, its sources **and** a `sufficient` flag from a single
+call. So there is no separate judge node and no extra model call — a round that
+comes back insufficient sends the specialist out again, carrying what it found.
+
+**Leads are how the second hop happens.** Names the graph surfaced in round one
+— read straight out of the rendered edges — are handed to round two as things
+worth searching for. That is the whole mechanism, and it is deterministic: no
+model call decides what to carry forward.
+
+**A role declares the effect it requires.** Acquisition holds `corpus_profile`
+and `poll_task`, both read-only, so "has any permitted tool" reported it
+available on a read-only budget — where it could poll tasks it could never
+start. A role is available when the effect it exists for is.
+
+### The defect from phase 03, before and after
+
+```
+before (loop alone)      graph_neighbors → answered half the question, 18.4s
+after  (supervisor)      graph_neighbors → search_corpus → synthesis, 33.8s
+                         "Acme Corporation acquired Beta Industries in March
+                          2026. The quarterly revenue was 42.5 million dollars."
+                         sufficient · 2 sentences verified · 0 flagged
+```
+
+Twice the time for twice the answer. Worth knowing that the cost is roughly
+linear in rounds, which is why the default is two.
+
+### The verifier, measured
+
+`bench/verify.py`, thirteen claims mixed into eleven whole answers:
+
+| | catches unsupported claims | flags supported ones wrongly |
+|---|---|---|
+| **qwen2.5:3b** | **18/22 (82%)** | 8/28 (29%) |
+| llama3.2:3b | 10/22 (45%) | 2/28 (7%) |
+
+So the verifier runs on the **extraction** model, not the agent model — a third
+role wanting a third assignment. `llama3.2:3b` agrees with almost anything,
+which is the same disposition that makes it stop when told to and a liability
+here; it let through a reversed relationship (*"Beta Industries acquired Acme
+Corporation"*) and an invented headquarters.
+
+Two things about that benchmark are worth keeping. Its first version scored one
+sentence at a time, and `llama3.2:3b` vouched for all fourteen unsupported
+claims — with nothing to discriminate against, everything looks supported. A
+benchmark that tests a component in a mode it is never used in produces a
+confident number about nothing.
+
+And the verifier's prompt originally asked which sentences were **not**
+supported. On claims sitting verbatim in the passages, qwen named the wrong one
+and llama named none. Asked which **are** supported, both named exactly the
+right ones. Small models invert negated selection often enough that a verifier
+built on one is not a verifier. The inversion also fails closed: a sentence the
+model does not list is flagged, which is the right direction for a check whose
+output is an annotation rather than a deletion.
+
+**A 29% false-alarm rate is high**, which is why `AGENT_VERIFY` is a setting.
+Flagging is non-destructive, so the trade is defensible — but a reader who sees
+one supported sentence in three marked will stop reading the marks.
+
+### Still outstanding
+
+`graph_neighbors` costs ~12s per call, against ~5s for a model call, because
+Kuzu is opened and the entity index loaded on every invocation. With specialists
+now making several graph calls per run, this is the largest single cost in an
+investigation and the obvious next thing to fix. It is not a cached handle away:
+Kuzu's lock is process-wide, and a long-lived read handle is what the current
+open-per-call design exists to avoid.
+
+### A run that shows the design working
+
+Asked *"What is the capital of Mongolia?"* — nothing in the corpus — the system
+answers "Ulaanbaatar", reports `sufficient=False`, and flags the sentence as
+unsupported. The answer is true and the system still declines to vouch for it,
+which is exactly the distinction the verifier's prompt is built on: not whether
+a claim is true, but whether these passages say it.
 
 ## Phase 05 — Surfaces (~2 days)
 

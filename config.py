@@ -179,6 +179,17 @@ class EngineConfig(BaseSettings):
     AGENT_MAX_TOOL_CALLS: int = 20
     AGENT_MAX_SECONDS: float = 90.0
     AGENT_MAX_TOKENS: int = 60_000
+    #: How many rounds the supervisor runs. A round is a whole specialist loop
+    #: plus a synthesis call, so two is already ~35s on this hardware. The
+    #: second round is where a multi-hop answer comes from; a third rarely adds
+    #: evidence the second did not.
+    AGENT_MAX_ROUNDS: int = 2
+    #: Check the drafted answer against the passages it cites. Measured at 82%
+    #: of unsupported claims caught, against 29% of supported sentences flagged
+    #: wrongly (bench/verify.py) — worth having, since a flag is an annotation
+    #: rather than a deletion, but the false-alarm rate is high enough that it
+    #: is a setting rather than a fact of the system.
+    AGENT_VERIFY: bool = True
     AI_TIMEOUT: float = 300.0
     #: How long Ollama keeps the model resident after a call. Its own default is
     #: 5 minutes, so an intermittent pipeline pays a measured ~2.2s reload on
