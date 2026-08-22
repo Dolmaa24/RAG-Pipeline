@@ -46,6 +46,7 @@ EXPECTED = {
     "discover_sitemap": Effect.NETWORK,
     "extract_url": Effect.WRITE,
     "crawl_site": Effect.WRITE,
+    "index_document": Effect.WRITE,
 }
 
 
@@ -164,6 +165,7 @@ def test_registering_the_same_name_twice_is_refused(scratch_registry):
         ("detect_url", {"url": "https://example.com"}),
         ("discover_sitemap", {"url": "https://example.com"}),
         ("extract_url", {"url": "https://example.com"}),
+        ("index_document", {"text": "some text", "source": "notes.txt"}),
         ("crawl_site", {"start_url": "https://example.com"}),
     ],
 )
@@ -277,3 +279,66 @@ def test_dates_pass_through_as_scalars():
     compiled = FilterArgs(date_from="2026-01-01", date_to="2026-03-31").to_filter()
     assert compiled.date_from == "2026-01-01"
     assert compiled.date_to == "2026-03-31"
+
+
+# --------------------------------------------------------------------------- #
+# index_document
+# --------------------------------------------------------------------------- #
+
+
+def test_indexing_queues_rather_than_blocking(monkeypatch):
+    # Chunking, embedding and storing a document takes tens of seconds. A tool
+    # call that waited for it would only add a way to time out.
+    captured = {}
+
+    class _Queued:
+        id = "task-123"
+
+    def fake_delay(text, **kwargs):
+        captured["text"] = text
+        captured.update(kwargs)
+        return _Queued()
+
+    import tasks
+
+    monkeypatch.setattr(tasks.index_document, "delay", fake_delay)
+
+    call = invoke(
+        "index_document",
+        {"text": "Acme acquired Beta.", "source": "memo.txt", "department": "legal"},
+        allowed=ALL_EFFECTS,
+    )
+
+    assert call.ok
+    assert "task-123" in call.observation
+    assert captured["source"] == "memo.txt"
+    assert captured["metadata"] == {"department": "legal"}
+    assert captured["build_graph"] is False
+
+
+def test_blank_provenance_is_left_out_rather_than_stored_empty(monkeypatch):
+    # An empty department is not a department. Storing "" would make the value
+    # show up in corpus_profile's filter list as a real thing to filter on.
+    captured = {}
+
+    class _Queued:
+        id = "task-456"
+
+    monkeypatch.setattr(
+        __import__("tasks").index_document,
+        "delay",
+        lambda text, **kw: (captured.update(kw), _Queued())[1],
+    )
+
+    invoke(
+        "index_document",
+        {"text": "x", "source": "s", "department": "   ", "region": ""},
+        allowed=ALL_EFFECTS,
+    )
+    assert captured["metadata"] is None
+
+
+def test_indexing_needs_write_permission():
+    call = invoke("index_document", {"text": "x", "source": "s"})
+    assert not call.ok
+    assert "write" in call.error.lower()

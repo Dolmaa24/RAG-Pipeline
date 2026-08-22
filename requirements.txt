@@ -56,6 +56,13 @@ flower==2.0.1            # queue visibility on :5555
 fastapi==0.141.1
 uvicorn[standard]==0.52.1
 
+# --- MCP: the tool catalog, exposed to external clients ---
+# The official SDK. Its MCPServer (FastMCP's successor in 2.x) generates tool
+# schemas from a function signature, which is why mcp_server.py synthesises a
+# flat one — registering the registry's model-taking handlers directly would
+# publish nested schemas, and small models handle those markedly worse.
+mcp==2.0.0
+
 # --- Storage ---
 pymongo==4.17.0
 

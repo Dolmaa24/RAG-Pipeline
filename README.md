@@ -720,6 +720,53 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | `POST /api/v1/answer` | Ask a question; get an answer that cites its sources. |
 | `GET /health` | Workers, queue depth, Redis, Mongo, both LLM backends. |
 
+## MCP: using the corpus from Claude Desktop or Claude Code
+
+The same tools the internal agent loop uses are exposed over the Model Context
+Protocol, so an external client can search the corpus, traverse the graph and —
+if you allow it — extract new pages.
+
+```bash
+./run.sh mcp            # stdio, what a desktop client spawns
+./run.sh mcp --http     # streamable HTTP on MCP_HTTP_PORT (default 8765)
+```
+
+For Claude Desktop, add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "corpus": {
+      "command": "/absolute/path/to/WebScraping_PipelineTry2/venv/bin/python",
+      "args": ["/absolute/path/to/WebScraping_PipelineTry2/mcp_server.py"],
+      "env": { "PYTHONPATH": "/absolute/path/to/WebScraping_PipelineTry2" }
+    }
+  }
+}
+```
+
+**Seven read-only tools are exposed by default** — `corpus_profile`,
+`search_corpus`, `answer_from_corpus`, `graph_neighbors`, `graph_path`,
+`fetch_chunk`, `poll_task`. Tools that reach the network or change the corpus
+are *not advertised at all* unless you turn them on:
+
+```bash
+MCP_ALLOW_NETWORK=true   # detect_url, discover_sitemap
+MCP_ALLOW_WRITE=true     # extract_url, crawl_site, index_document
+```
+
+Absent rather than refused, because a client shown a tool it cannot call will
+call it, spend a turn learning that, and try again.
+
+Two things worth knowing before enabling write. The workers must be running —
+those tools enqueue Celery jobs and return a task id to poll. And a write tool
+taking free text is an attractor: asked to *delete* documents, both local 3B
+models reached for `index_document` instead of declining. The effect gate, not
+the model's judgement, is what protects the corpus.
+
+The corpus is also exposed as MCP resources: `corpus://profile`, and
+`corpus://chunk/{chunk_id}` for citing one passage by URI.
+
 Useful request options: `allowed_tiers` (e.g. `[1]` for structured data only,
 `[3]` to force the model), `local_only` (never send content to a hosted model),
 `force_dynamic` (browser rendering), `fan_out` (enqueue a feed's or sitemap's

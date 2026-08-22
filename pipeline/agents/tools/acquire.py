@@ -25,6 +25,7 @@ from pipeline.agents.tools.models import (
     DetectArgs,
     DetectResult,
     ExtractArgs,
+    IndexArgs,
     PollArgs,
     PollResult,
     SitemapArgs,
@@ -176,6 +177,51 @@ def crawl_site(args: CrawlArgs) -> TaskResult:
 
 
 @tool(
+    name="index_document",
+    effect=Effect.WRITE,
+    cost_ms=20000,
+    description=(
+        "Make a piece of text searchable: chunk it, embed it, and add it to the "
+        "corpus under a source you name. Use it for text you already have — "
+        "pasted, or handed to you — rather than a URL, which extract_url "
+        "handles. Returns a task id; poll it before searching for the content. "
+        "It only ever adds. It cannot delete, edit or remove anything, and it "
+        "cannot send or share anything; if that is what was asked for, say it "
+        "is not possible instead of calling this."
+    ),
+)
+def index_document(args: IndexArgs) -> TaskResult:
+    from tasks import index_document as task
+
+    metadata = {
+        key: value
+        for key, value in (
+            ("department", args.department.strip()),
+            ("region", args.region.strip()),
+            ("permission_level", args.permission_level.strip()),
+        )
+        if value
+    }
+
+    queued = task.delay(
+        args.text,
+        source=args.source,
+        metadata=metadata or None,
+        build_graph=args.build_graph,
+    )
+    return TaskResult(
+        task_id=queued.id,
+        kind=f"indexing of {args.source}",
+        note=(
+            "Entities and relationships will be extracted too, which takes "
+            "considerably longer than indexing alone."
+            if args.build_graph
+            else "Text only; no graph was built."
+        ),
+    )
+
+
+@tool(
     name="poll_task",
     effect=Effect.READ,
     cost_ms=5,
@@ -248,5 +294,6 @@ __all__ = [
     "detect_url",
     "discover_sitemap",
     "extract_url",
+    "index_document",
     "poll_task",
 ]

@@ -127,16 +127,18 @@ helpful.
 | `extract_url` | `tasks.extract_url` | write | 5–60 s |
 | `crawl_site` | `tasks.crawl_site` | write | minutes |
 | `poll_task` | `AsyncResult` | read | ~5 ms |
-| `index_document` † | `tasks.index_document` | write | 5–90 s |
-| `build_graph` † | `pipeline.graph.builder` | write | 30 s–minutes |
+| `index_document` | `tasks.index_document` | write | 5–90 s |
 
-† **Not yet built.** The settled scope includes indexing and graph construction
-as things an agent may deliberately do, rather than side effects of extraction —
-"we fetched this, now make it searchable" and "now extract its entities" as two
-decisions the trace can show separately. Both wrap tasks that already exist and
-both are `write`, so they inherit the opt-in gate. Add them to
-`pipeline/agents/tools/acquire.py` before phase 04, when an acquisition agent
-first has reason to call them.
+Twelve tools. `index_document` covers the settled scope's "make this
+searchable" and, through its `build_graph` flag, "now extract its entities" —
+the underlying task already does both, and the trace shows which was asked for.
+
+**What is deliberately missing:** a tool that builds the graph for a document
+*already indexed*, without re-supplying its text. Stored chunks carry no
+ordering column, so a document's text cannot be reassembled from the corpus in
+its original order, and graph extraction over shuffled windows would quietly
+produce worse relationships. That needs a schema migration on the store, not a
+tool, so it is not being smuggled in as one.
 
 The three effect classes carry different permissions. **read** touches only what
 has already been indexed and is always available. **network** reaches the outside
@@ -176,7 +178,7 @@ description is worth more than the same sentence in a system prompt.
 call every handler with zero model calls. Nothing agentic yet — and that is the
 point, because this layer stays correct whether or not the rest lands.
 
-## Phase 01 — The MCP server (~1 day)
+## Phase 01 — The MCP server ✅ shipped
 
 New `mcp_server.py` over the official `mcp` Python SDK. Two transports from one
 registry: stdio for Claude Desktop and Claude Code, and streamable HTTP mounted on
@@ -200,6 +202,43 @@ having nothing.
 **Ships:** a running MCP server, a `claude_desktop_config.json` snippet in the
 README, and one end-to-end transcript of a multi-hop question answered from the
 corpus through an external client.
+
+### As built
+
+`mcp_server.py`, on `mcp==2.0.0`. Seven read-only tools by default; `detect_url`
+and `discover_sitemap` behind `MCP_ALLOW_NETWORK`, the three write tools behind
+`MCP_ALLOW_WRITE`. Kept as two settings rather than the one
+`MCP_ALLOW_ACQUISITION` this plan first named, because the registry has always
+held that network permission does not imply write, and collapsing them in the
+adapter would contradict the layer it adapts.
+
+**The one thing that needed real work: schemas.** The SDK generates a tool's
+schema from its function signature, and the registry's handlers each take a
+single Pydantic model — so registering them directly publishes
+`{"args": {"$ref": ...}}`. Phase 00 chose flat arguments because small models
+mishandle nesting, and the gate measured that at 90–100% argument accuracy. So
+the adapter synthesises a signature whose parameters are the model's own fields,
+carrying each field's description and bounds through `Annotated` — without that,
+the generated schema keeps only names and types, and the per-argument
+descriptions vanish silently. `tests/test_mcp_server.py` asserts no `$ref` or
+`$defs` reaches any published schema, because nothing would *fail* if one did;
+models would just quietly get worse.
+
+**Argument validation happens above `invoke()`.** The SDK validates against the
+generated schema and raises before the registry sees the call, so the registry's
+"every failure is an observation" property does not apply to bad arguments.
+Checked through the protocol this surfaces as `isError: true` carrying the same
+explanation — a result the model reads rather than a transport failure — so the
+property that matters survives by a different route.
+
+**A write tool with a free-text argument is an attractor.** Adding
+`index_document` cost both models on the trap cases: asked to *delete* every
+document about a company, and to *email* a summary, they called `index_document`
+in 9 of 12 trials. Naming what the tool cannot do, in its own description, fixed
+this for qwen (50% → 100%) and did nothing for llama, which still reaches for it
+every time. The effect gate is what protects the corpus here, not the model's
+judgement — which is an argument for `MCP_ALLOW_WRITE` defaulting off that is
+now measured rather than assumed.
 
 ## Gate — the tool-selection benchmark (half a day, run first)
 
@@ -265,8 +304,12 @@ run, whatever the question. That single number does more to decide the
 architecture than the tool-selection score does, and averaging it with the trap
 cases — as the first version of this benchmark did — hid it completely.
 
-**Every failure was deterministic**: identical on all three passes at temperature
-0. These are systematic and therefore addressable by description and prompt
+**Failures repeat within a run**: identical on all three passes at temperature
+0. Across runs, after the catalog or a description changed, individual cells
+moved by one or two cases — at n=6 per cell that is not distinguishable from
+noise, so only differences of several cases are worth reading. What held across
+every run: tool selection 83–92%, zero fabrication, qwen stopping 0% of the
+time, llama stopping 100% of the time. These are systematic and therefore addressable by description and prompt
 changes, not noise to be averaged away. Two are worth fixing before phase 03:
 both models prefer `search_corpus` over `answer_from_corpus` for a self-contained
 cited question, and qwen loses the question across a turn (it searched for

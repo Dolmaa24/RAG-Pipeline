@@ -101,6 +101,18 @@ class EngineConfig(BaseSettings):
     MAX_ARCHIVE_MEMBERS: int = 200
     MAX_FEED_ENTRIES: int = 100
     MAX_SITEMAP_URLS: int = 5000
+    # ------------------------------------------------------------------ #
+    # MCP: the tool catalog, exposed to external clients
+    # ------------------------------------------------------------------ #
+    #: Both default off. Read-only tools touch what is already indexed and are
+    #: always safe to expose; these two let a client reach the outside world or
+    #: change the corpus, which is a decision an operator makes rather than
+    #: something a client earns by asking. Kept separate because the registry
+    #: keeps them separate — network permission has never implied write.
+    MCP_ALLOW_NETWORK: bool = False
+    MCP_ALLOW_WRITE: bool = False
+    MCP_HTTP_PORT: int = 8765
+
     #: Where uploaded files are written. The API writes them and a worker in
     #: another process reads them, so on a split deployment this must name a
     #: volume both can see. Relative paths are resolved against the repo root,

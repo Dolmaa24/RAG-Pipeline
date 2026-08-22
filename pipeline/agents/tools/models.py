@@ -311,6 +311,30 @@ class ExtractArgs(BaseModel):
     )
 
 
+class IndexArgs(BaseModel):
+    text: str = Field(
+        ..., min_length=1, description="The document's text, as plain text."
+    )
+    source: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Where it came from — a URL, a filename, or another stable "
+            "identifier. Searches can filter on it and citations will show it."
+        ),
+    )
+    department: str = Field("", description="Optional provenance filter.")
+    region: str = Field("", description="Optional provenance filter.")
+    permission_level: str = Field("", description="Optional provenance filter.")
+    build_graph: bool = Field(
+        False,
+        description=(
+            "Also extract entities and relationships into the knowledge graph. "
+            "Much slower — one model call per window of text."
+        ),
+    )
+
+
 class CrawlArgs(BaseModel):
     start_url: str = Field(..., min_length=1)
     prompt: str = Field("Extract the main content and its key fields.")

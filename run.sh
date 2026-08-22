@@ -4,6 +4,7 @@
 #   ./run.sh              # everything: both workers, API, dashboard
 #   ./run.sh worker-io    # I/O worker only (threads, high concurrency)
 #   ./run.sh worker-cpu   # CPU/GPU worker only (Whisper, LLM, Chromium)
+#   ./run.sh mcp          # MCP server over stdio (add --http for the HTTP one)
 #   ./run.sh api
 #   ./run.sh dashboard
 #   ./run.sh flower
@@ -57,6 +58,9 @@ worker_cpu() {
 }
 
 api()       { exec "$VENV/uvicorn" app:app --host 127.0.0.1 --port 8000 --reload; }
+# Not part of `all`: an MCP client spawns its own copy over stdio, and a
+# long-lived one is only wanted for the HTTP transport.
+mcp()       { exec "$VENV/python" mcp_server.py "$@"; }
 dashboard() { exec "$VENV/streamlit" run dashboard.py; }
 flower()    { check_redis; exec "$VENV/celery" -A celery_app flower --port=5555; }
 
@@ -82,6 +86,7 @@ case "${1:-all}" in
   api)        api ;;
   dashboard)  dashboard ;;
   flower)     flower ;;
+  mcp)        shift; mcp "$@" ;;
   all)        all ;;
-  *) echo "usage: $0 [all|worker-io|worker-cpu|api|dashboard|flower]" >&2; exit 2 ;;
+  *) echo "usage: $0 [all|worker-io|worker-cpu|api|dashboard|flower|mcp]" >&2; exit 2 ;;
 esac

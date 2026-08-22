@@ -220,3 +220,9 @@ def _reset_caches():
     _clear()
     yield
     _clear()
+
+
+@pytest.fixture
+def anyio_backend():
+    """asyncio only. The MCP server tests are async; trio is not installed."""
+    return "asyncio"
