@@ -643,14 +643,20 @@ docker compose up -d            # redis + mongo
 docker compose --profile ops up -d   # + flower on :5555
 ```
 
-A local model, if you want one:
+Local models. Two, because three jobs were measured separately and they do not
+want the same one — extraction and verification want `qwen2.5:3b`, the agent
+loop wants `llama3.2:3b` (`bench/tool_calling.py`, `bench/verify.py`):
 
 ```bash
-ollama pull llama3.2:3b
+ollama pull qwen2.5:3b      # extraction, verification  (AI_MODEL_NAME)
+ollama pull llama3.2:3b     # the agent loop            (AGENT_MODEL_NAME)
 ```
 
+If only one is pulled, the agent falls back to it with a warning naming the
+command — slower and worse, not broken.
+
 Neither MongoDB nor a Groq key is required. Without Mongo, results go to
-`output/extractions.jsonl`; without Groq, extraction uses Ollama.
+`output/extractions.jsonl`; without Groq, everything uses Ollama.
 
 ## Running
 
@@ -658,24 +664,42 @@ Neither MongoDB nor a Groq key is required. Without Mongo, results go to
 Before starting the pipeline, ensure your background services are actually running. If you're running locally without Docker:
 
 ```bash
-# 1. Check if Redis is running (should answer PONG)
+# 1. Redis, the broker (should answer PONG)
 redis-cli ping
 
-# 2. Check if Ollama is running and has the model
+# 2. Ollama, and the two models
 ollama list
 ```
-If Redis is down, Celery workers will fail to connect. If Ollama is down, extraction will time out. *(If you're using Docker for infrastructure, `docker ps` will show if Redis and Mongo are up.)*
+If Redis is down, Celery workers will fail to connect. If Ollama is down,
+extraction will time out. *(With Docker for infrastructure, `docker ps` shows
+whether Redis and Mongo are up.)*
 
 ### Starting the Pipeline
 
 ```bash
-./run.sh                # both workers + API + dashboard; Ctrl-C stops all
+./run.sh                # three workers + API + dashboard; Ctrl-C stops all
 ./run.sh worker-io      # or start pieces individually
 ./run.sh worker-cpu
+./run.sh worker-agents  # investigations; threads pool, warms the embedder
 ./run.sh api            # http://127.0.0.1:8000/docs
 ./run.sh dashboard      # http://localhost:8501
+./run.sh mcp            # MCP over stdio (--http for the HTTP transport)
 ./run.sh flower         # http://localhost:5555
 ```
+
+Then check everything came up:
+
+```bash
+curl -s localhost:8000/health | python3 -m json.tool
+```
+
+`workers_online` should be 4 (the io and cpu pools report one each, plus
+agents), and `queue_depth` should list `io`, `cpu` and `agents`.
+
+**Workers do not hot-reload.** The API runs with `--reload`, so editing a route
+takes effect immediately; editing anything a *task* runs — the pipeline, the
+agents, the tools — needs the workers restarted. Most confusing bug reports in
+this project have started there.
 
 Synchronously, with no broker and no API — the way to debug, since a traceback
 stays a traceback:
