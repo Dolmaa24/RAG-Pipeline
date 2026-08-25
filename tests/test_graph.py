@@ -616,3 +616,71 @@ def test_a_path_shape_that_matches_neither_convention_is_dropped(graph: GraphSto
     nonsense = {"_nodes": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
                 "_rels": [{"relation": "X"}, {"relation": "Y"}, {"relation": "Z"}]}
     assert _path_triples(nonsense, start="A", end="C") == []
+
+
+# --------------------------------------------------------------------------- #
+# Clearing the graph
+# --------------------------------------------------------------------------- #
+
+
+def test_a_read_only_graph_refuses_to_be_cleared(tmp_path):
+    """The read-only handle is the one retrieval uses, and it is shared.
+
+    Clearing through it would be a write from a connection that exists
+    precisely so that model-generated Cypher cannot write.
+    """
+    import pytest
+
+    from pipeline.graph.store import GraphStore
+
+    with GraphStore(str(tmp_path / "g"), read_only=False):
+        pass  # create the schema
+
+    with GraphStore(str(tmp_path / "g"), read_only=True) as store:
+        with pytest.raises(RuntimeError, match="read-only"):
+            store.clear()
+
+
+def test_clearing_reports_what_it_removed(tmp_path):
+    from pipeline.graph.schema import Entity, Relationship
+    from pipeline.graph.store import GraphStore
+
+    with GraphStore(str(tmp_path / "g")) as store:
+        store.upsert(
+            [Entity(name="Acme", type="Organization", description="a company"),
+             Entity(name="Beta", type="Organization", description="a company")],
+            [Relationship(source="Acme", target="Beta", relation="ACQUIRED",
+                          description="Acme acquired Beta.")],
+        )
+        assert store.count()["entities"] == 2
+
+        removed = store.clear()
+
+        assert removed["entities"] == 2
+        assert removed["relationships"] == 1
+        assert store.count() == {"entities": 0, "relationships": 0}
+
+
+def test_clearing_keeps_the_schema_so_the_next_build_appends(tmp_path):
+    # DETACH DELETE rather than deleting the file: a reader elsewhere holding
+    # an open handle would otherwise be left pointing at nothing.
+    from pipeline.graph.schema import Entity, Relationship
+    from pipeline.graph.store import GraphStore
+
+    with GraphStore(str(tmp_path / "g")) as store:
+        store.upsert([Entity(name="Acme", type="Organization", description="a company")], [])
+        store.clear()
+        store.upsert(
+            [Entity(name="Northwind", type="Organization", description="a company"),
+             Entity(name="Fabrikam", type="Organization", description="a company")],
+            [Relationship(source="Northwind", target="Fabrikam",
+                          relation="ACQUIRED", description="bought it")],
+        )
+        assert store.count() == {"entities": 2, "relationships": 1}
+
+
+def test_clearing_an_already_empty_graph_is_not_an_error(tmp_path):
+    from pipeline.graph.store import GraphStore
+
+    with GraphStore(str(tmp_path / "g")) as store:
+        assert store.clear() == {"entities": 0, "relationships": 0}

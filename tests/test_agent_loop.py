@@ -181,12 +181,17 @@ def test_the_same_result_twice_ends_the_run():
     assert result.spend.tool_calls == 2
 
 
-def test_different_results_do_not_trip_the_no_progress_stop():
-    backend = Scripted(
-        _call("graph_neighbors", entity="Acme"),
-        _call("graph_neighbors", entity="Beta"),
-        _answer("both checked"),
-    )
+def test_different_results_do_not_trip_the_no_progress_stop(varying_tool):
+    """Uses the varying fixture, not two real entity lookups.
+
+    The first version looked up "Acme" and "Beta" against the live graph and
+    assumed the answers would differ. It passed for as long as that graph
+    happened to contain them, and failed the moment the graph was cleared —
+    when both calls returned "no graph has been built" and the no-progress stop
+    correctly fired. A test that depends on the developer's own data reports on
+    the data, not the code.
+    """
+    backend = Scripted(*_varying_calls(2), _answer("both checked"))
     result = AgentLoop(backend=backend, budget=Budget(max_iterations=99)).run("q")
 
     assert result.stopped == "answered"

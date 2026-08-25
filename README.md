@@ -747,6 +747,7 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | `POST /api/v1/ask` | Either of the two, chosen by the question's shape. |
 | `GET /api/v1/route` | Which path a question would take, without taking it. |
 | `DELETE /api/v1/index/source` | Forget a document. Deleting the uploaded file does not. |
+| `DELETE /api/v1/graph` | Empty the knowledge graph. All of it — see below. |
 | `GET /health` | Workers, queue depth, Redis, Mongo, both LLM backends. |
 
 ## Investigations
@@ -782,6 +783,19 @@ only needed while it is being extracted; the text lives in the vector store
 afterwards. Use `DELETE /api/v1/index/source`, or *Remove a document* in the
 dashboard sidebar, or the system will go on answering from a document you
 believe you have deleted.
+
+**The knowledge graph is not removed with a document, and cannot be.** It is
+derived data with no link back to its sources: an entity two documents mention
+is one node, and nothing records which contributed which half. So removing a
+document's passages leaves its entities and edges behind, and the only honest
+granularity for the graph is all of it — `DELETE /api/v1/graph`, or *Reset the
+knowledge graph* in the sidebar. Rebuild by extracting the documents again with
+`build_graph` on.
+
+There are three stores, and they are cleared separately: passages in LanceDB,
+edges in Kuzu, and the entity vectors that seed traversal in a second LanceDB
+table. The graph endpoint clears the last two together, because clearing one
+leaves the other pointing at things that no longer exist.
 
 **A hosted model for the agent loop needs more than a free tier.** The loop
 resends its tool schemas every turn — about 1,900 tokens before the question —

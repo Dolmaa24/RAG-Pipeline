@@ -298,6 +298,30 @@ class GraphStore:
             return []
         return _dedupe([t for row in rows for t in _triples_from_row(row)])
 
+    def clear(self) -> dict[str, int]:
+        """Empty the graph, keeping the schema. Returns what was removed.
+
+        Needed because the graph is derived data with no link back to the
+        documents it came from. Removing a document's passages leaves its
+        entities and edges behind, and there is no query that can find them: an
+        entity two documents mention is one node, and nothing records which
+        document contributed which half of it. So the only honest granularity
+        for the graph is all of it.
+
+        ``DETACH DELETE`` rather than deleting the database file, because a
+        reader elsewhere in the process holding an open handle would be left
+        pointing at nothing. The tables survive, so the next build appends to a
+        schema that already exists.
+        """
+        if self.read_only:
+            raise RuntimeError("the graph was opened read-only; cannot clear it")
+
+        before = self.count()
+        self._conn.execute("MATCH (a:Entity)-[r:CONNECTS_TO]->(b:Entity) DELETE r")
+        self._conn.execute("MATCH (n:Entity) DELETE n")
+        log.info("graph.cleared", **before)
+        return before
+
     def relation_kinds(self, limit: int = 50) -> list[str]:
         """Which kinds of relationship the graph actually holds."""
         query = """

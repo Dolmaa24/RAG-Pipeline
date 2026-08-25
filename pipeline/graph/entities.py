@@ -181,6 +181,24 @@ class EntityIndex:
             return []
         return [str(row["name"]) for row in rows if row.get("name")]
 
+    def clear(self) -> int:
+        """Drop the entity table. Returns how many rows went.
+
+        The graph and this index are two halves of one thing: the graph holds
+        the edges, this holds the vectors that find a starting node. Clearing
+        one without the other leaves seeds pointing at entities that no longer
+        exist, which reads as a graph that is present and answers nothing.
+        """
+        table = self.table
+        if table is None:
+            return 0
+
+        rows = table.count_rows()
+        self.db.drop_table(TABLE_NAME, ignore_missing=True)
+        self._table = None
+        log.info("graph.entities.cleared", rows=rows)
+        return rows
+
     def count(self) -> int:
         table = self.table
         return table.count_rows() if table is not None else 0

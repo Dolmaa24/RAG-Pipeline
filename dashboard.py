@@ -84,6 +84,34 @@ with st.sidebar:
         st.metric("Graph entities", 0)
         st.caption("Build one with 'Knowledge graph' on.")
 
+    # The graph is derived data with no link back to its documents, so removing
+    # a document cannot remove what it contributed — an entity two documents
+    # mention is one node. All of it is the only honest granularity, and
+    # without this the graph goes on answering after its sources are gone.
+    graph_rows = (graph or {}).get("counts", {}) if graph else {}
+    if graph and graph.get("available") and graph_rows.get("entities"):
+        with st.expander("Reset the knowledge graph"):
+            st.caption(
+                "Removes every entity and relationship, and the entity index "
+                "that seeds traversal. Rebuild by extracting the documents "
+                "again with 'Knowledge graph' on."
+            )
+            if st.button("Clear the graph", key="clear_graph_go"):
+                try:
+                    response = requests.delete(f"{API}/api/v1/graph", timeout=60)
+                    response.raise_for_status()
+                    gone = response.json()
+                except requests.HTTPError as exc:
+                    st.error(api_detail(exc))
+                except requests.RequestException as exc:
+                    st.error(f"Could not reach the API: {exc}")
+                else:
+                    st.success(
+                        f"Cleared {gone.get('entities', 0)} entities and "
+                        f"{gone.get('relationships', 0)} relationships."
+                    )
+                    st.rerun()
+
     # Deleting the uploaded file removes the file, not the text: the upload is
     # only needed while it is being extracted, and the corpus keeps its own
     # copy. Without this, a document goes on answering questions after the user

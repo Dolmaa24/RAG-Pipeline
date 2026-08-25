@@ -721,6 +721,52 @@ def forget_source(
     }
 
 
+@app.delete("/api/v1/graph", tags=["retrieve"])
+def clear_graph() -> dict:
+    """Empty the knowledge graph and the entity index that seeds it.
+
+    All of it, because that is the only honest granularity. The graph is
+    derived data with no link back to the documents it came from — an entity
+    two documents mention is one node, and nothing records which contributed
+    which half — so there is no query that finds "everything this source added".
+
+    Both stores go together. The graph holds the edges and the entity index
+    holds the vectors that find a starting node, and clearing one leaves the
+    other pointing at things that no longer exist.
+
+    To rebuild: extract the documents again with ``build_graph`` on.
+    """
+    removed = {"entities": 0, "relationships": 0, "entity_index_rows": 0}
+
+    try:
+        from pipeline.graph.store import GraphStore, graph_exists
+
+        if graph_exists():
+            with GraphStore() as store:
+                removed.update(store.clear())
+    except Exception as exc:
+        log.exception("api.clear_graph_failed", error=repr(exc))
+        raise HTTPException(
+            500,
+            f"could not clear the graph ({exc}). A worker may be holding it open "
+            "— Kuzu allows one writer and no readers alongside it.",
+        ) from exc
+
+    try:
+        from pipeline.graph.entities import EntityIndex
+
+        removed["entity_index_rows"] = EntityIndex().clear()
+    except Exception as exc:
+        log.warning("api.clear_entities_failed", error=repr(exc))
+        removed["entity_index_error"] = str(exc)
+
+    log.info("api.graph_cleared", **{k: v for k, v in removed.items() if isinstance(v, int)})
+    return {
+        **removed,
+        "note": "Rebuild by extracting the documents again with build_graph on.",
+    }
+
+
 @app.get("/api/v1/index/stats", tags=["retrieve"])
 def index_stats() -> dict:
     """What is in the vector store, and which filter values it holds."""
