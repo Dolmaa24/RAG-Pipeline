@@ -746,6 +746,7 @@ curl -X POST localhost:8000/api/v1/extract -H 'Content-Type: application/json' -
 | `GET /api/v1/investigations/{id}` | Progress while it runs, then the answer and the reasoning. |
 | `POST /api/v1/ask` | Either of the two, chosen by the question's shape. |
 | `GET /api/v1/route` | Which path a question would take, without taking it. |
+| `DELETE /api/v1/index/source` | Forget a document. Deleting the uploaded file does not. |
 | `GET /health` | Workers, queue depth, Redis, Mongo, both LLM backends. |
 
 ## Investigations
@@ -775,6 +776,20 @@ tab does the same and shows the trace as it goes.
 Investigations run on their own `agents` queue, started by `./run.sh` along with
 everything else. A ninety-second run on the `io` queue would sit in a thread
 sixteen page fetches are waiting behind.
+
+**Deleting an uploaded file does not remove it from the corpus.** The file is
+only needed while it is being extracted; the text lives in the vector store
+afterwards. Use `DELETE /api/v1/index/source`, or *Remove a document* in the
+dashboard sidebar, or the system will go on answering from a document you
+believe you have deleted.
+
+**A hosted model for the agent loop needs more than a free tier.** The loop
+resends its tool schemas every turn — about 1,900 tokens before the question —
+so eight turns is roughly 16,000 tokens against Groq's free 8,000 per minute.
+One investigation exhausts the window in three turns and everything after it
+fails with a 413, answer generation included. `LLM_VERIFY_BACKEND` and
+`LLM_INTERACTIVE_BACKEND` are the cheap ones; `LLM_AGENT_BACKEND` wants a paid
+tier.
 
 **Reaching outside the corpus is off by default.** `allow_network` lets a run
 fetch a URL named in the question once the corpus has come up short, and

@@ -84,6 +84,41 @@ with st.sidebar:
         st.metric("Graph entities", 0)
         st.caption("Build one with 'Knowledge graph' on.")
 
+    # Deleting the uploaded file removes the file, not the text: the upload is
+    # only needed while it is being extracted, and the corpus keeps its own
+    # copy. Without this, a document goes on answering questions after the user
+    # believes they have removed it.
+    if stats and stats.get("chunks"):
+        with st.expander("Remove a document"):
+            indexed = stats.get("filters", {}).get("source", [])
+            if not indexed:
+                st.caption("Nothing to remove.")
+            else:
+                chosen = st.selectbox(
+                    "Source", indexed, key="forget_source",
+                    format_func=lambda s: s if len(s) < 46 else "…" + s[-45:],
+                )
+                st.caption(
+                    "Removes its passages from search. Knowledge-graph entities "
+                    "stay: they are merged across documents, so they cannot be "
+                    "attributed to one."
+                )
+                if st.button("Remove from corpus", key="forget_go"):
+                    try:
+                        response = requests.delete(
+                            f"{API}/api/v1/index/source",
+                            params={"source": chosen}, timeout=30,
+                        )
+                        response.raise_for_status()
+                        gone = response.json().get("chunks_removed", 0)
+                    except requests.HTTPError as exc:
+                        st.error(api_detail(exc))
+                    except requests.RequestException as exc:
+                        st.error(f"Could not reach the API: {exc}")
+                    else:
+                        st.success(f"Removed {gone} passage(s).")
+                        st.rerun()
+
 # Main Interface
 extract_tab, search_tab, investigate_tab = st.tabs(["Extract", "Search", "Investigate"])
 

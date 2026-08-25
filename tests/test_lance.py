@@ -186,3 +186,81 @@ def test_a_scored_row_is_normalised_best_first(store: LanceStore):
     assert hits[0]["score"] == pytest.approx(1.0)
     assert all(0.0 <= h["score"] <= 1.0 for h in hits)
     assert hits == sorted(hits, key=lambda h: h["score"], reverse=True)
+
+
+# --------------------------------------------------------------------------- #
+# Forgetting a document
+# --------------------------------------------------------------------------- #
+
+
+def test_removing_a_source_reports_what_it_removed(monkeypatch):
+    """Deleting an uploaded file removed the file and left the corpus alone.
+
+    The upload is only needed while it is being extracted; the text lives in
+    the store afterwards, and nothing connected the two — so the system went on
+    answering from documents the user believed they had removed.
+    """
+    from pipeline.store.lance import LanceStore
+
+    deleted: list[str] = []
+
+    class FakeTable:
+        def delete(self, where):
+            deleted.append(where)
+
+    store = LanceStore.__new__(LanceStore)
+    store._table = FakeTable()
+    monkeypatch.setattr(type(store), "table", property(lambda self: self._table))
+    monkeypatch.setattr(type(store), "count", lambda self, where=None: 3)
+
+    assert store.delete_source("upload://ab12-report.pdf/") == 3
+    assert deleted == ["source = 'upload://ab12-report.pdf/'"]
+
+
+def test_removing_a_source_that_is_not_there_removes_nothing(monkeypatch):
+    # "Removed 0" is the answer a caller most needs told accurately, so it is
+    # counted rather than assumed from a return value LanceDB does not give.
+    from pipeline.store.lance import LanceStore
+
+    class FakeTable:
+        def delete(self, where):  # pragma: no cover - must not be reached
+            raise AssertionError("deleted when there was nothing to delete")
+
+    store = LanceStore.__new__(LanceStore)
+    store._table = FakeTable()
+    monkeypatch.setattr(type(store), "table", property(lambda self: self._table))
+    monkeypatch.setattr(type(store), "count", lambda self, where=None: 0)
+
+    assert store.delete_source("upload://never-existed.pdf/") == 0
+
+
+def test_a_blank_source_is_refused_rather_than_matching_everything(monkeypatch):
+    from pipeline.store.lance import LanceStore
+
+    class FakeTable:
+        def delete(self, where):  # pragma: no cover
+            raise AssertionError("a blank source must not reach a delete")
+
+    store = LanceStore.__new__(LanceStore)
+    store._table = FakeTable()
+    monkeypatch.setattr(type(store), "table", property(lambda self: self._table))
+
+    assert store.delete_source("   ") == 0
+
+
+def test_a_source_with_a_quote_is_escaped(monkeypatch):
+    from pipeline.store.lance import LanceStore
+
+    deleted: list[str] = []
+
+    class FakeTable:
+        def delete(self, where):
+            deleted.append(where)
+
+    store = LanceStore.__new__(LanceStore)
+    store._table = FakeTable()
+    monkeypatch.setattr(type(store), "table", property(lambda self: self._table))
+    monkeypatch.setattr(type(store), "count", lambda self, where=None: 1)
+
+    store.delete_source("upload://o'brien.pdf/")
+    assert deleted == ["source = 'upload://o''brien.pdf/'"]

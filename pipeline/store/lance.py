@@ -326,6 +326,34 @@ class LanceStore:
         )
         return rows[0] if rows else None
 
+    def delete_source(self, source: str) -> int:
+        """Remove every chunk from one source. Returns how many went.
+
+        Until this existed, deleting an uploaded file removed the *file* and
+        left the corpus untouched, so the system went on answering from a
+        document that was no longer anywhere the user could see. The upload is
+        only needed while it is being extracted; the text lives here
+        afterwards, and nothing connected the two.
+
+        Counted before and after rather than trusting a return value: LanceDB's
+        delete reports nothing useful, and "removed 0 chunks" is the answer a
+        caller most needs to be told accurately.
+        """
+        table = self.table
+        if table is None or not source.strip():
+            return 0
+
+        from pipeline.retrieve.filters import quote_literal
+
+        where = f"source = {quote_literal(source.strip())}"
+        before = self.count(where=where)
+        if not before:
+            return 0
+
+        table.delete(where)
+        log.info("lance.deleted", source=source, chunks=before)
+        return before
+
     def distinct(self, column: str, limit: int = 200) -> list[str]:
         """The values a filter column actually holds. For building a UI."""
         table = self.table

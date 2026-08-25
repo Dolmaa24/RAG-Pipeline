@@ -679,6 +679,48 @@ def answer(request: SearchRequest) -> dict:
     return payload
 
 
+@app.delete("/api/v1/index/source", tags=["retrieve"])
+def forget_source(
+    source: str = Query(
+        ...,
+        min_length=1,
+        description="Exactly as it appears in /api/v1/index/stats, e.g. "
+                    "upload://ab12cd-report.pdf/",
+    )
+) -> dict:
+    """Remove one document's chunks from the corpus.
+
+    Deleting an uploaded *file* does not do this. The file is only needed while
+    it is being extracted; the text lives in the vector store afterwards, and
+    nothing connected the two — so the system went on answering from documents
+    the user believed they had removed.
+
+    The knowledge graph is left alone. Its entities are merged across documents,
+    so "everything this source contributed" is not a set the graph can identify
+    without re-deriving it, and removing an entity that two documents support
+    because one was deleted would be worse than leaving it. Rebuild the graph if
+    that matters.
+    """
+    try:
+        from pipeline.store.lance import LanceStore
+
+        removed = LanceStore().delete_source(source)
+    except Exception as exc:
+        log.exception("api.forget_failed", source=source[:120], error=repr(exc))
+        raise HTTPException(500, f"could not remove {source}: {exc}") from exc
+
+    log.info("api.forget", source=source[:120], chunks=removed)
+    return {
+        "source": source,
+        "chunks_removed": removed,
+        "found": bool(removed),
+        "note": (
+            "Knowledge-graph entities from this source are unchanged; they are "
+            "merged across documents and cannot be attributed to one."
+        ),
+    }
+
+
 @app.get("/api/v1/index/stats", tags=["retrieve"])
 def index_stats() -> dict:
     """What is in the vector store, and which filter values it holds."""
