@@ -228,7 +228,23 @@ class EngineConfig(BaseSettings):
     OLLAMA_NUM_CTX: int = 8192
     OLLAMA_NUM_PREDICT: int = 4096
     GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    #: llama-3.3-70b-versatile, the previous default, was shut down on
+    #: 2026-08-16. Groq named two replacements; this is the production one —
+    #: qwen/qwen3.6-27b is the other and is preview-only. It is also faster and
+    #: cheaper than what it replaces, and unlike llama-3.3 it is recognised by
+    #: _JSON_SCHEMA_MODELS, so extraction can ask the API to enforce the shape
+    #: rather than validating afterwards.
+    #:
+    #: That last part is worth verifying rather than trusting: there are
+    #: reports of this model ignoring response_format json_schema and returning
+    #: prose. Nothing breaks if it does — the reply is parsed and validated on
+    #: this side and retried once, exactly as Ollama's is — but the guarantee
+    #: would be imaginary. Watch for llm.retrying_for_schema in the logs, and
+    #: drop "openai/gpt-oss" from _JSON_SCHEMA_MODELS if it shows up often.
+    #:
+    #: openai/gpt-oss-20b is half the price and twice the speed if the
+    #: tokens-per-minute ceiling on the free tier is what binds.
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_TIMEOUT: float = 60.0
     #: Never send content to a hosted model. Forces the Ollama backend even
     #: when GROQ_BACKEND would be faster.
