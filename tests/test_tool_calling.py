@@ -25,7 +25,9 @@ from pipeline.extract.llm.groq import _wire as groq_wire
 from pipeline.extract.llm.ollama import _arguments_of, _as_ollama_tool
 from pipeline.extract.llm.ollama import _wire as ollama_wire
 from pipeline.extract.llm.toolshim import (
+    AdaptiveToolBackend,
     ShimmedBackend,
+    _looks_like_a_missed_call,
     _turn_from,
     render_conversation,
     render_tools,
@@ -263,6 +265,9 @@ class _Native:
     def supports_tools(self):
         return True
 
+    def complete_with_tools(self, *, messages, tools, tool_choice="auto"):
+        return ToolTurn(calls=[ToolRequest(name="search_corpus", arguments={"query": "x"})])
+
 
 class _NotNative:
     name = "old"
@@ -280,9 +285,15 @@ class _Raises:
         raise RuntimeError("probe exploded")
 
 
-def test_a_native_backend_is_left_alone():
+def test_a_native_backend_keeps_calling_natively():
+    """Wrapped, but the wrapper is a no-op until native calling actually fails."""
     backend = _Native()
-    assert shim_if_needed(backend) is backend
+    wrapped = shim_if_needed(backend)
+    assert isinstance(wrapped, AdaptiveToolBackend)
+
+    turn = wrapped.complete_with_tools(messages=[], tools=TOOLS)
+    assert [call.name for call in turn.calls] == ["search_corpus"]
+    assert wrapped.name == "native"  # never re-labelled, never shimmed
 
 
 def test_a_backend_without_tools_is_wrapped_rather_than_rejected():
@@ -386,3 +397,70 @@ def test_a_real_model_calls_a_tool_and_reads_the_result():
     # It may answer or search again; what must hold is that the history with a
     # tool result in it was accepted rather than rejected as malformed.
     assert second.calls or second.text
+
+
+# --------------------------------------------------------------------------- #
+# A model that claims tools and cannot use them
+# --------------------------------------------------------------------------- #
+
+
+class _ClaimsToolsButWritesProse:
+    """Advertises tools, then writes the call out as content. llama3.2:3b."""
+
+    name = "pretender"
+    model = "m"
+
+    def __init__(self) -> None:
+        self.native_calls = 0
+        self.json_calls = 0
+
+    def supports_tools(self):
+        return True
+
+    def complete_with_tools(self, *, messages, tools, tool_choice="auto"):
+        self.native_calls += 1
+        return ToolTurn(text='{"name": "search_corpus", "parameters": {"')
+
+    def complete_json(self, *, prompt, content, schema_hint=None, json_schema=None):
+        self.json_calls += 1
+        return base.LLMResponse(
+            data={"tool": "search_corpus", "arguments": {"query": "articles"}},
+            backend="pretender",
+            model="m",
+        )
+
+
+def test_a_missed_call_is_recognised_by_shape_not_by_tool_name_alone():
+    assert _looks_like_a_missed_call('{"name": "search_corpus", "parameters": {"', TOOLS)
+    # Prose that merely mentions a tool must not cost a second call.
+    assert not _looks_like_a_missed_call("I would use search_corpus for this.", TOOLS)
+    assert not _looks_like_a_missed_call("", TOOLS)
+    # JSON that names no tool in the catalog is an answer, not a missed call.
+    assert not _looks_like_a_missed_call('{"answer": "two kinds"}', TOOLS)
+
+
+def test_a_claimed_tool_call_that_arrives_as_prose_falls_back_to_the_shim():
+    inner = _ClaimsToolsButWritesProse()
+    backend = shim_if_needed(inner)
+
+    turn = backend.complete_with_tools(messages=[], tools=TOOLS)
+
+    # The turn still lands: the caller sees a real call, not the prose.
+    assert [call.name for call in turn.calls] == ["search_corpus"]
+    assert turn.calls[0].arguments == {"query": "articles"}
+    assert turn.native is False
+    assert inner.native_calls == 1
+    assert inner.json_calls == 1
+
+
+def test_the_fallback_is_permanent_so_a_run_pays_for_it_once():
+    inner = _ClaimsToolsButWritesProse()
+    backend = shim_if_needed(inner)
+
+    for _ in range(3):
+        backend.complete_with_tools(messages=[], tools=TOOLS)
+
+    # Native was tried on the first turn and never again.
+    assert inner.native_calls == 1
+    assert inner.json_calls == 3
+    assert backend.name == "pretender+shim"

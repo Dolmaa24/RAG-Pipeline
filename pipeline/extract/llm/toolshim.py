@@ -16,8 +16,9 @@ That goes through ``complete_json``, which every backend already has and which
 Ollama constrains with a real grammar. It is slower than native tool calling —
 the whole catalog is re-rendered into the prompt every turn, where a tools array
 is sent once as structured data — and it is worse at multi-step work, because
-the conversation has to be flattened into text. It is a fallback, and
-:func:`shim_if_needed` only reaches for it when the backend says it must.
+the conversation has to be flattened into text. It is a fallback, reached
+either when a backend admits it cannot tool-call or when one that claimed it
+could is caught writing a call out as prose -- see :class:`AdaptiveToolBackend`.
 
 ``native=False`` on the resulting turn is not decoration. A trace that cannot
 tell a real tool call from a parsed one cannot explain why a run went badly.
@@ -214,8 +215,93 @@ def _turn_from(data: dict, tools: list[dict]) -> ToolTurn:
     return ToolTurn(calls=[ToolRequest(name=name, arguments=arguments)])
 
 
+def _looks_like_a_missed_call(text: str, tools: list[dict]) -> bool:
+    """Whether a call-less turn wrote the *shape* of a tool call as prose.
+
+    A model can advertise ``tools`` and still emit
+    ``{"name": "corpus_profile", "parameters": {"`` as ordinary content --
+    often truncated, always invisible to the tools array. ``llama3.2:3b`` does
+    exactly this against an eight-tool catalog. Native calling has silently
+    failed, and asking the same way again cannot fix it.
+
+    Deliberately narrow. An answer that merely mentions a tool by name is not
+    this: the text has to open as a JSON object *and* name a tool from the
+    catalog before a run pays for a second call.
+    """
+    stripped = (text or "").strip()
+    if not stripped.startswith("{"):
+        return False
+    return any(tool.get("name", "") in stripped for tool in tools)
+
+
+class AdaptiveToolBackend:
+    """Native tool calling, falling back to the shim once native visibly fails.
+
+    ``supports_tools()`` asks the model what it can do, which is a claim about
+    the template rather than a measurement of the model. A small model can hold
+    the capability and still be unable to use it, and the failure is silent:
+    no calls, no error, a turn of prose that reads like a call. The loop then
+    burns its whole round budget re-asking a question that will not land.
+
+    So the claim is trusted exactly once. The first turn that comes back
+    call-less holding the shape of a call switches this backend to constrained
+    decoding for the rest of its life, which is measurably what the same model
+    needed all along. Models that really do tool-call never trip it and pay
+    nothing: no probe, no extra call, no re-rendered catalog.
+
+    The switch is permanent by design. A model that cannot tool-call on turn
+    one will not learn to by turn three, and flapping between the two paths
+    would make a trace impossible to read.
+    """
+
+    def __init__(self, inner: LLMBackend) -> None:
+        self._inner = inner
+        self._shim = ShimmedBackend(inner)
+        self._native = True
+        self.name = inner.name
+        self.model = inner.model
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._inner, item)
+
+    def supports_tools(self) -> bool:
+        return True
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict],
+        tool_choice: str = "auto",
+    ) -> ToolTurn:
+        if not self._native:
+            return self._shim.complete_with_tools(
+                messages=messages, tools=tools, tool_choice=tool_choice
+            )
+
+        turn = self._inner.complete_with_tools(
+            messages=messages, tools=tools, tool_choice=tool_choice
+        )
+        if turn.calls or not _looks_like_a_missed_call(turn.text, tools):
+            return turn
+
+        # Not a warning about this turn -- the turn is retried and lands. It is
+        # a warning about the model, which claimed something untrue.
+        log.warning(
+            "llm.tool_native_failed",
+            backend=self._inner.name,
+            model=self.model,
+            wrote=turn.text[:120],
+        )
+        self._native = False
+        self.name = self._shim.name
+        return self._shim.complete_with_tools(
+            messages=messages, tools=tools, tool_choice=tool_choice
+        )
+
+
 def shim_if_needed(backend: LLMBackend) -> LLMBackend:
-    """The backend as-is when it tool-calls natively, wrapped when it does not."""
+    """Wrapped for constrained decoding now, or ready to be if native fails."""
     supports = getattr(backend, "supports_tools", None)
     try:
         native = bool(supports()) if callable(supports) else False
@@ -224,10 +310,16 @@ def shim_if_needed(backend: LLMBackend) -> LLMBackend:
         native = False
 
     if native:
-        return backend
+        return AdaptiveToolBackend(backend)
 
     log.info("llm.tool_shim_engaged", backend=backend.name, model=backend.model)
     return ShimmedBackend(backend)
 
 
-__all__ = ["ShimmedBackend", "shim_if_needed", "render_tools", "render_conversation"]
+__all__ = [
+    "AdaptiveToolBackend",
+    "ShimmedBackend",
+    "shim_if_needed",
+    "render_tools",
+    "render_conversation",
+]
