@@ -254,7 +254,7 @@ class RobotsGate:
             # runs under "unavailable, allowing by configuration" — a permission
             # nobody granted.
             with httpx.Client(
-                timeout=self.timeout, follow_redirects=True, verify=client_context()
+                timeout=self.timeout, follow_redirects=True, verify=client_context(robots_url)
             ) as client:
                 with client.stream("GET", robots_url, headers=headers) as response:
                     body = bytearray()
@@ -264,7 +264,7 @@ class RobotsGate:
                             break
                     return response.status_code, bytes(body[:_MAX_ROBOTS_BYTES])
         except httpx.HTTPError as exc:
-            log.warning("robots.fetch_failed", url=robots_url, error=explain(exc))
+            log.warning("robots.fetch_failed", url=robots_url, error=explain(exc, robots_url))
             return None, b""
 
 

@@ -272,7 +272,7 @@ class ResilientFetcher:
             "http2": True,
             "follow_redirects": False,  # handled above, so every hop is checked
             "timeout": config.STATIC_TIMEOUT,
-            "verify": client_context(),
+            "verify": client_context(url),
         }
         if config.PROXY_URL:
             client_kwargs["proxy"] = config.PROXY_URL
@@ -308,7 +308,7 @@ class ResilientFetcher:
             except httpx.TimeoutException as exc:
                 raise TransientFetchError(f"timed out after {config.STATIC_TIMEOUT:.0f}s", url=url) from exc
             except httpx.TransportError as exc:
-                raise TransientFetchError(explain(exc), url=url) from exc
+                raise TransientFetchError(explain(exc, url), url=url) from exc
 
         if config.DETECT_BLOCKS:
             signal = detect_block(status, response_headers, body)

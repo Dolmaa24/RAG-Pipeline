@@ -85,6 +85,12 @@ class EngineConfig(BaseSettings):
     #: Turn it on when a specific site you trust needs it — a fair number of
     #: government and university sites run TLS stacks that old.
     TLS_ALLOW_LEGACY_RENEGOTIATION: bool = False
+    #: The same permission, granted per host instead of globally. A comma-
+    #: separated list of hostnames; a bare domain covers its subdomains, so
+    #: "iitm.ac.in" admits "gate2027.iitm.ac.in". Prefer this to the global
+    #: flag above: one out-of-date university site is a reason to lower the bar
+    #: for that site, not for every host the crawler will ever reach.
+    TLS_LEGACY_HOSTS: str = ""
     USE_BROWSER_FALLBACK: bool = True
     STATIC_TIMEOUT: float = 20.0
     BROWSER_TIMEOUT_MS: int = 30000
@@ -500,6 +506,14 @@ class EngineConfig(BaseSettings):
     @property
     def host_denylist(self) -> frozenset[str]:
         return frozenset(h.strip().lower() for h in self.HOST_DENYLIST.split(",") if h.strip())
+
+    @property
+    def tls_legacy_hosts(self) -> frozenset[str]:
+        return frozenset(
+            h.strip().lower().lstrip(".")
+            for h in self.TLS_LEGACY_HOSTS.split(",")
+            if h.strip()
+        )
 
     @property
     def graph_ner_labels(self) -> tuple[str, ...]:
