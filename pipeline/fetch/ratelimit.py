@@ -11,6 +11,13 @@ you would otherwise get.
 :meth:`HostRateLimiter.observe_headers` then reads the server's own
 ``RateLimit-*`` headers and slows down *before* the 429, which is the
 difference between a job that finishes and one that gets the IP banned.
+
+*One limit for the whole pipeline, not one per process.* The primitives below
+are ``threading`` ones, which is right for the io queue's thread pool and
+useless for the cpu queue's ``--pool=prefork`` children: each got its own
+bucket, so the configured rate was silently multiplied by the number of
+workers. :mod:`pipeline.fetch.shared` holds that state in Redis instead, and
+these local objects are the fallback for when Redis cannot answer.
 """
 
 from __future__ import annotations
@@ -25,6 +32,8 @@ from typing import Iterator, Mapping, Optional
 from config import config
 from observability import get_logger
 from urls import registrable_host
+
+from pipeline.fetch import shared
 
 log = get_logger("fetch.ratelimit")
 
@@ -125,6 +134,9 @@ class HostRateLimiter:
         )
         self._hosts: dict[str, _HostState] = {}
         self._lock = threading.Lock()
+        #: None when Redis is unreachable, and then every path below falls back
+        #: to the local primitives.
+        self._shared = shared.connect()
 
     # ------------------------------------------------------------------ #
     # Acquisition
@@ -143,15 +155,67 @@ class HostRateLimiter:
         state = self._state(host)
         waited = 0.0
 
-        state.semaphore.acquire()
+        lease = self._acquire_slot(state, host)
         try:
             waited += self._wait_for_block(state, host)
-            waited += state.bucket.take()
+            waited += self._take_token(state, host)
             waited += self._wait_for_gap(state)
             yield waited
         finally:
             state.last_request = time.monotonic()
+            self._release_slot(state, host, lease)
+
+    # -- concurrency, shared when it can be ----------------------------- #
+
+    def _acquire_slot(self, state: "_HostState", host: str) -> Optional[str]:
+        """Block until this host is under its concurrency cap.
+
+        Polls rather than waits on a condition: a lease can also expire, and a
+        waiter blocked on a local primitive would never notice that.
+        """
+        if self._shared is None:
+            state.semaphore.acquire()
+            return None
+
+        while True:
+            try:
+                lease = self._shared.try_acquire(host, self.max_concurrency_per_host)
+            except Exception as exc:  # Redis went away mid-crawl
+                log.warning("ratelimit.shared_failed", host=host, error=repr(exc))
+                self._shared = None
+                state.semaphore.acquire()
+                return None
+            if lease is not None:
+                return lease
+            time.sleep(0.05)
+
+    def _release_slot(self, state: "_HostState", host: str, lease: Optional[str]) -> None:
+        if lease is None or self._shared is None:
             state.semaphore.release()
+            return
+        try:
+            self._shared.release(host, lease)
+        except Exception as exc:
+            # The lease expires on its own, so this costs a delay, not a leak.
+            log.warning("ratelimit.release_failed", host=host, error=repr(exc))
+
+    def _take_token(self, state: "_HostState", host: str) -> float:
+        """Wait for this host's next token. Returns seconds waited."""
+        if self._shared is None:
+            return state.bucket.take()
+
+        waited = 0.0
+        while True:
+            try:
+                delay = self._shared.take(host, rate=self.rate, capacity=float(self.burst))
+            except Exception as exc:
+                log.warning("ratelimit.shared_failed", host=host, error=repr(exc))
+                self._shared = None
+                return waited + state.bucket.take()
+            if delay <= 0:
+                return waited
+            time.sleep(delay)
+            waited += delay
 
     def _state(self, host: str) -> _HostState:
         with self._lock:
@@ -165,9 +229,20 @@ class HostRateLimiter:
                 self._hosts[host] = state
             return state
 
-    @staticmethod
-    def _wait_for_block(state: _HostState, host: str) -> float:
+    def _wait_for_block(self, state: _HostState, host: str) -> float:
+        """Honour a pause, whichever worker was told about it.
+
+        A ``Retry-After`` arrives on one response, in one process. Kept locally,
+        that worker backs off politely while its siblings carry on at full rate
+        into a host that has just asked everyone to stop.
+        """
         remaining = state.blocked_until - time.monotonic()
+        if self._shared is not None:
+            try:
+                remaining = max(remaining, self._shared.penalty_remaining(host))
+            except Exception as exc:
+                log.warning("ratelimit.shared_failed", host=host, error=repr(exc))
+                self._shared = None
         if remaining <= 0:
             return 0.0
         log.info("ratelimit.paused", host=host, seconds=round(remaining, 1))
@@ -205,6 +280,12 @@ class HostRateLimiter:
         host = registrable_host(url) or url
         state = self._state(host)
         state.blocked_until = max(state.blocked_until, time.monotonic() + seconds)
+        if self._shared is not None:
+            try:
+                self._shared.penalize(host, seconds)
+            except Exception as exc:
+                log.warning("ratelimit.shared_failed", host=host, error=repr(exc))
+                self._shared = None
         log.warning("ratelimit.penalty", host=host, seconds=round(seconds, 1))
 
     def observe_response(self, url: str, status: int, headers: Mapping[str, str]) -> None:

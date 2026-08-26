@@ -54,6 +54,10 @@ class EngineConfig(BaseSettings):
     RATE_BURST: int = 3
     MIN_HOST_DELAY: float = 0.0
     MAX_CONCURRENCY_PER_HOST: int = 2
+    #: Keep rate-limit state in Redis so every worker process shares one budget.
+    #: Off falls back to per-process limits, which a prefork pool multiplies by
+    #: the number of children -- correct only when a single process fetches.
+    RATELIMIT_SHARED: bool = True
     #: Cap on a Crawl-delay we will actually honour by sleeping. A site asking
     #: for 300s per page is asking you not to crawl it; that becomes an error
     #: rather than a worker that sleeps for five minutes.
