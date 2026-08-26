@@ -53,6 +53,19 @@ AGENT = "agent"
 #: third job that a third model wins: it wants scepticism, where the agent role
 #: wants a model that knows when to stop.
 VERIFY = "verify"
+#: Authoring CSS selectors for a domain, once. The strongest case in this
+#: pipeline for a hosted model, and the opposite of the volume problem that
+#: makes one unaffordable for extraction: it costs one call per *domain*, and
+#: its output is replayed free on every page after.
+#:
+#: The job also asks for something a 3B model is measurably bad at. On
+#: books.toscrape.com, qwen2.5:3b answered a three-field schema with
+#: ``td[content='£51.77']`` -- an attribute that does not exist in the markup,
+#: on an element the skeleton had already shown it as ``p.price_color``. Two of
+#: three rules were dead, the spec fell below MIN_FILL_RATE, and every page of
+#: the site then paid tier 3. openai/gpt-oss-120b learned two of the three from
+#: the same skeleton, which is enough to store and replay.
+SELECTOR = "selector"
 
 
 def get_backend(
@@ -82,10 +95,13 @@ def get_backend(
         return _resolve(choice)
     except ExtractError:
         fallback = config.LLM_BACKEND.lower()
-        # Only an *interactive preference* falls back. An explicitly named
-        # backend still fails loudly, because naming one is a decision about
-        # where the content may go, not a preference about speed.
-        if explicit or role != INTERACTIVE or fallback == choice:
+        # Only a *preference* falls back. An explicitly named backend still
+        # fails loudly, because naming one is a decision about where the
+        # content may go, not a preference about speed. Selector learning is a
+        # preference for the same reason interactive is: an unreachable
+        # hosted model should make the pipeline slower and worse at tier 2,
+        # not stop it extracting.
+        if explicit or role not in (INTERACTIVE, SELECTOR) or fallback == choice:
             raise
         log.warning("llm.interactive_unavailable", wanted=choice, using=fallback)
         return _resolve(fallback)
@@ -116,6 +132,8 @@ def _configured(role: str) -> str:
         return config.LLM_AGENT_BACKEND
     if role == VERIFY and config.LLM_VERIFY_BACKEND:
         return config.LLM_VERIFY_BACKEND
+    if role == SELECTOR and config.LLM_SELECTOR_BACKEND:
+        return config.LLM_SELECTOR_BACKEND
     return config.LLM_BACKEND
 
 
@@ -206,6 +224,7 @@ def status() -> dict:
 __all__ = [
     "AGENT",
     "BULK",
+    "SELECTOR",
     "VERIFY",
     "GroqBackend",
     "INTERACTIVE",

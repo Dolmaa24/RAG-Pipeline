@@ -242,7 +242,9 @@ class ExtractionCascade:
             return None
 
         try:
-            backend = self._get_backend(local_only)
+            from .llm import SELECTOR
+
+            backend = self._get_backend(local_only, role=SELECTOR)
         except ExtractError as exc:
             log.debug("cascade.tier2_no_backend", error=str(exc))
             return None
@@ -328,12 +330,18 @@ class ExtractionCascade:
     # Helpers
     # ------------------------------------------------------------------ #
 
-    def _get_backend(self, local_only: bool):
+    def _get_backend(self, local_only: bool, role: Optional[str] = None):
+        """The backend for one tier's call.
+
+        Tier 2 and tier 3 are different jobs. Authoring selectors happens once
+        per domain and wants the best model available; extracting fields
+        happens once per document and wants the one with no rate limit.
+        """
         if self._backend is not None:
             return self._backend
-        from .llm import get_backend
+        from .llm import BULK, get_backend
 
-        return get_backend(local_only=local_only)
+        return get_backend(local_only=local_only, role=role or BULK)
 
     def _store(
         self,

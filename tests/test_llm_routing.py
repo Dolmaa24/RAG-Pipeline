@@ -129,3 +129,73 @@ def test_the_output_ceiling_is_not_hardcoded_above_a_free_tier():
     assert "max_tokens=8192" not in source
     assert "max_tokens=config.GROQ_MAX_OUTPUT_TOKENS" in source
     assert config.GROQ_MAX_OUTPUT_TOKENS <= 8000
+
+
+# --------------------------------------------------------------------------- #
+# Authoring selectors is its own job
+# --------------------------------------------------------------------------- #
+
+
+def test_selector_learning_can_differ_from_bulk(monkeypatch, backends):
+    """The cheapest place in the pipeline to spend a hosted model.
+
+    One call per domain, replayed free on every page after -- the opposite of
+    the volume that makes a hosted model unaffordable for extraction.
+    """
+    monkeypatch.setattr(config, "LLM_BACKEND", "ollama")
+    monkeypatch.setattr(config, "LLM_SELECTOR_BACKEND", "groq")
+    assert llm.get_backend(role=llm.SELECTOR).name == "groq"
+    assert llm.get_backend(role=llm.BULK).name == "ollama"
+
+
+def test_selector_defaults_to_the_bulk_setting(monkeypatch, backends):
+    monkeypatch.setattr(config, "LLM_BACKEND", "ollama")
+    monkeypatch.setattr(config, "LLM_SELECTOR_BACKEND", None)
+    assert llm.get_backend(role=llm.SELECTOR).name == "ollama"
+
+
+def test_an_unavailable_selector_preference_falls_back(monkeypatch, backends):
+    """An unreachable hosted model should make tier 2 worse, not stop ingest.
+
+    Learning would then fail on the local model and the page pays tier 3 --
+    slower and more expensive, but it still extracts.
+    """
+    _, groq = backends
+    groq.reachable = False
+    monkeypatch.setattr(config, "LLM_BACKEND", "ollama")
+    monkeypatch.setattr(config, "LLM_SELECTOR_BACKEND", "groq")
+    assert llm.get_backend(role=llm.SELECTOR).name == "ollama"
+
+
+def test_local_only_overrides_the_selector_preference(monkeypatch, backends):
+    """Learning sends a DOM skeleton to the model, so the privacy switch binds."""
+    monkeypatch.setattr(config, "LLM_BACKEND", "ollama")
+    monkeypatch.setattr(config, "LLM_SELECTOR_BACKEND", "groq")
+    assert llm.get_backend(role=llm.SELECTOR, local_only=True).name == "ollama"
+
+
+def test_the_cascade_asks_for_the_selector_role_when_learning(monkeypatch):
+    """Tier 2 and tier 3 are different jobs and must not share a backend.
+
+    Without this the role exists and nothing uses it, which is exactly how the
+    setting silently did nothing.
+    """
+    import inspect
+
+    from pipeline.extract import cascade
+
+    source = inspect.getsource(cascade.ExtractionCascade)
+    assert "role=SELECTOR" in source
+    # Tier 3 must not have been switched over with it.
+    assert source.count("role=SELECTOR") == 1
+
+
+def test_the_cascade_defaults_to_bulk_for_everything_else(monkeypatch, backends):
+    from pipeline.extract.cascade import ExtractionCascade
+
+    monkeypatch.setattr(config, "LLM_BACKEND", "ollama")
+    monkeypatch.setattr(config, "LLM_SELECTOR_BACKEND", "groq")
+    cascade = ExtractionCascade()
+
+    assert cascade._get_backend(False).name == "ollama"          # tier 3
+    assert cascade._get_backend(False, role=llm.SELECTOR).name == "groq"

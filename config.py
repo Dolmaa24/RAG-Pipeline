@@ -182,6 +182,11 @@ class EngineConfig(BaseSettings):
     #: run hosted while page content stays local. None means "same as
     #: LLM_BACKEND".
     LLM_AGENT_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
+    #: Which backend authors a domain's selector spec. One call per domain,
+    #: replayed free on every page after -- so this is the cheapest place in
+    #: the pipeline to spend a hosted model, and the one where a 3B model's
+    #: habit of inventing attributes costs the most. Unset follows LLM_BACKEND.
+    LLM_SELECTOR_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
     #: The agent loop's ceiling. These are not a safety net: the tool-calling
     #: benchmark found the local models never decide they are finished, so the
     #: turn limit is what ends a run. See pipeline/agents/budget.py.
