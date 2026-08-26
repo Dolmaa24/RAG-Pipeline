@@ -51,6 +51,8 @@ _BODY_SIGNALS: tuple[tuple[str, str], ...] = (
     ("unusual traffic from your computer network", "traffic analysis block"),
     ("are you a robot", "bot challenge"),
     ("verifying you are human", "human verification"),
+    ("user validation required", "captcha interstitial"),
+    ("captcha_resp_txt", "captcha interstitial"),
 )
 
 #: Markers strong enough to believe at HTTP 200, because no ordinary page has
@@ -64,6 +66,14 @@ _STANDALONE_SIGNALS: frozenset[str] = frozenset(
         "_incapsula_resource",
         "px-captcha",
         "verifying you are human",
+        # Appliance-style challenges that answer at 200 on *every* path, this
+        # project's own /robots.txt included. A wall serving robots.txt is the
+        # dangerous shape: the parser reads a challenge page, finds no rules,
+        # and reports the site as permitting everything. Both markers are
+        # specific enough to believe alone -- "captcha" on its own is not, and
+        # is deliberately absent, because ordinary pages discuss captchas.
+        "user validation required",
+        "captcha_resp_txt",
     }
 )
 
