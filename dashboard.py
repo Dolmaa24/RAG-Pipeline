@@ -169,6 +169,12 @@ with left:
     with st.expander("Options"):
         crawl_depth = st.number_input("Max crawl depth (0 for single page)", 0, 10, 0)
         crawl_budget = st.number_input("Max URLs (for crawls)", 1, 50000, 200)
+        do_children = st.checkbox(
+            "Recurse into contained documents", value=True,
+            help="Archive members, feed entries and attachments — the parts a "
+                 "container arrives with. Unrelated to crawl depth, which walks "
+                 "links between pages.",
+        )
 
         st.caption("Retrieval")
         do_index = st.checkbox(
@@ -176,9 +182,10 @@ with left:
             help="Chunk, embed and store the text so the Search tab can find it.",
         )
         do_graph = st.checkbox(
-            "Build knowledge graph", value=False,
+            "Build knowledge graph", value=config.GRAPH_ENABLED,
             help="Extract entities and relationships. One model call per chunk, "
-                 "so this is much slower than indexing alone.",
+                 "so this is much slower than indexing alone. Defaults to "
+                 f"GRAPH_ENABLED, currently {config.GRAPH_ENABLED}.",
         )
         st.caption("Provenance — filters you can search on later")
         meta_department = st.text_input("Department", "", placeholder="finance")
@@ -284,7 +291,7 @@ with right:
                         "schema_template": schema,
                         "force_dynamic": False,
                         "local_only": False,
-                        "follow_children": True,
+                        "follow_children": bool(do_children),
                         "allowed_tiers": None,
                         "index": bool(do_index),
                         "build_graph": bool(do_graph),
