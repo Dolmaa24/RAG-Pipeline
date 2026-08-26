@@ -204,7 +204,11 @@ def verify(
         response = backend.complete_json(
             prompt=_INSTRUCTION,
             content=f"SENTENCES:\n{numbered}\n\nPASSAGES:\n{evidence}",
-            schema_hint={"unsupported": "list of integers", "note": "string"},
+            # Must name the same key as _SCHEMA. A backend that does not
+            # enforce the schema -- Groq's gpt-oss-* among them -- has only
+            # this hint to go on, and a hint asking for the opposite list left
+            # ``supported`` empty on every call, which flags every sentence.
+            schema_hint={"supported": "list of integers", "note": "string"},
             json_schema=_SCHEMA,
         )
     except Exception as exc:

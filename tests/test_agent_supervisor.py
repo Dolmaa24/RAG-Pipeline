@@ -465,3 +465,33 @@ def test_the_graph_can_be_asked_which_rather_than_only_about_whom():
     names = {spec.name for spec in catalog([Effect.READ])}
     assert "graph_relations" in names
     assert "graph_relations" in CORPUS.tools
+
+
+def test_the_schema_hint_names_the_same_key_as_the_schema():
+    """A backend that does not enforce the schema has only the hint to go on.
+
+    These drifted apart once: the hint asked for ``unsupported`` while the code
+    read ``supported``. Groq answered the hint, ``supported`` came back empty,
+    and every sentence of every answer was flagged -- a check that always says
+    the same thing carries no information, and it looked like a model problem
+    rather than a one-word mismatch.
+    """
+    from pipeline.agents.verify import _SCHEMA
+
+    captured = {}
+
+    class Records:
+        def complete_json(self, **kwargs):
+            from pipeline.extract.llm.base import LLMResponse
+
+            captured.update(kwargs)
+            return LLMResponse(data={"supported": [1]}, backend="f", model="m")
+
+    verify("One.", ["e"], backend=Records())
+
+    assert captured["json_schema"] is _SCHEMA
+    hinted = set(captured["schema_hint"]) - {"note"}
+    assert hinted <= set(_SCHEMA["properties"]), (
+        f"schema_hint asks for {hinted}, schema offers {set(_SCHEMA['properties'])}"
+    )
+    assert set(_SCHEMA["required"]) <= set(captured["schema_hint"])
