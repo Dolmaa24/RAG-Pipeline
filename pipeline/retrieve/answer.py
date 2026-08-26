@@ -188,7 +188,6 @@ def answer_question(
         reply.warnings.append("empty question")
         return reply
 
-    # --- retrieve ------------------------------------------------------- #
     stage = time.perf_counter()
     if result is None:
         result = retrieve(
@@ -217,7 +216,6 @@ def answer_question(
         log.info("answer.no_evidence", question=question[:60])
         return reply
 
-    # --- answer --------------------------------------------------------- #
     stage = time.perf_counter()
     try:
         if backend is None:

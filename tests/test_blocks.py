@@ -13,11 +13,6 @@ from pipeline.fetch.blocks import block_guidance, detect_block
 ORDINARY = b"<html><body><h1>Quarterly report</h1><p>Revenue rose.</p></body></html>"
 
 
-# --------------------------------------------------------------------------- #
-# Ordinary responses are not walls
-# --------------------------------------------------------------------------- #
-
-
 def test_an_ordinary_page_is_not_a_block():
     assert detect_block(status=200, headers={}, body=ORDINARY) is None
 
@@ -33,11 +28,6 @@ def test_a_long_document_mentioning_a_marker_is_not_a_block():
     assert detect_block(status=200, headers={}, body=body) is None
 
 
-# --------------------------------------------------------------------------- #
-# Vendor headers are conclusive whatever the status
-# --------------------------------------------------------------------------- #
-
-
 def test_a_vendor_header_is_believed_at_200():
     signal = detect_block(status=200, headers={"cf-mitigated": "challenge"}, body=ORDINARY)
     assert signal is not None and signal.source == "header"
@@ -46,11 +36,6 @@ def test_a_vendor_header_is_believed_at_200():
 def test_datadome_is_recognised_by_its_header_alone():
     signal = detect_block(status=200, headers={"X-DataDome": "protected"}, body=ORDINARY)
     assert signal is not None and signal.name == "datadome"
-
-
-# --------------------------------------------------------------------------- #
-# Body markers
-# --------------------------------------------------------------------------- #
 
 
 def test_the_cloudflare_interstitial_is_caught_at_200():
@@ -65,10 +50,6 @@ def test_a_weak_marker_needs_a_refusal_status():
     assert detect_block(status=200, headers={}, body=body) is None
     assert detect_block(status=403, headers={}, body=body) is not None
 
-
-# --------------------------------------------------------------------------- #
-# Appliance challenges that answer 200 on every path
-# --------------------------------------------------------------------------- #
 
 #: Trimmed from the live response of an .ac.in host that began challenging this
 #: pipeline mid-session. HTTP 200, no vendor header, and served just as readily
@@ -113,11 +94,6 @@ def test_a_page_that_merely_discusses_captchas_is_not_a_wall():
         b"text, and some sites drop the captcha entirely.</p></body></html>"
     )
     assert detect_block(status=200, headers={}, body=article) is None
-
-
-# --------------------------------------------------------------------------- #
-# What an operator is told
-# --------------------------------------------------------------------------- #
 
 
 def test_the_guidance_offers_routes_around_and_refuses_evasion():

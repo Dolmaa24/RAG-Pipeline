@@ -188,11 +188,6 @@ def test_a_scored_row_is_normalised_best_first(store: LanceStore):
     assert hits == sorted(hits, key=lambda h: h["score"], reverse=True)
 
 
-# --------------------------------------------------------------------------- #
-# Forgetting a document
-# --------------------------------------------------------------------------- #
-
-
 def test_removing_a_source_reports_what_it_removed(monkeypatch):
     """Deleting an uploaded file removed the file and left the corpus alone.
 

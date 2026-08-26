@@ -31,11 +31,6 @@ from typing import Optional
 from pipeline.extract.llm.ollama import OllamaBackend
 
 
-# --------------------------------------------------------------------------- #
-# The corpus, with the answers written down
-# --------------------------------------------------------------------------- #
-
-
 @dataclass
 class Case:
     name: str
@@ -106,11 +101,6 @@ ALIAS_CASES = [
 ]
 
 
-# --------------------------------------------------------------------------- #
-# Scoring
-# --------------------------------------------------------------------------- #
-
-
 def _found(needle: str, haystack: list[str]) -> bool:
     low = needle.lower()
     return any(low in item.lower() or item.lower() in low for item in haystack)
@@ -164,11 +154,6 @@ class Score:
             f"cypher {self.cypher_valid}/{self.cypher_total}  "
             f"{self.seconds:.1f}s total"
         )
-
-
-# --------------------------------------------------------------------------- #
-# The run
-# --------------------------------------------------------------------------- #
 
 
 def evaluate(model: str) -> Score:

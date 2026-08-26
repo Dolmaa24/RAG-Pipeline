@@ -179,11 +179,6 @@ def _args_model_of(handler: Callable[[Any], Any]) -> Type[BaseModel]:
     return model
 
 
-# --------------------------------------------------------------------------- #
-# Reading the catalog
-# --------------------------------------------------------------------------- #
-
-
 def get(name: str) -> ToolSpec:
     try:
         return _REGISTRY[name]
@@ -215,11 +210,6 @@ def describe_all(allowed: Iterable[Effect] = READ_ONLY) -> list[dict[str, Any]]:
 def clear() -> None:
     """Empty the registry. For tests that register throwaway tools."""
     _REGISTRY.clear()
-
-
-# --------------------------------------------------------------------------- #
-# Calling
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(slots=True)

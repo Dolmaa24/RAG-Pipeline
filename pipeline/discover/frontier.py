@@ -170,8 +170,6 @@ class RedisFrontier:
         pipe.expire(self._seen_key, CRAWL_TTL_SECONDS)
         pipe.execute()
 
-    # ------------------------------------------------------------------ #
-
     def claim(self, urls: Iterable[tuple[str, int]]) -> list[tuple[str, int]]:
         """Accept only URLs never seen before, and only within budget."""
         candidates = [(url, depth) for url, depth in urls if url]

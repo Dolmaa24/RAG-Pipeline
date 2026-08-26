@@ -55,11 +55,6 @@ class TransientError(PipelineError):
     transient = True
 
 
-# --------------------------------------------------------------------------- #
-# Compliance / access
-# --------------------------------------------------------------------------- #
-
-
 class ComplianceError(PipelineError):
     """The pipeline declined to make the request. Never retried."""
 
@@ -106,11 +101,6 @@ class CircuitOpen(PipelineError):
             host=host,
             retry_after=retry_after,
         )
-
-
-# --------------------------------------------------------------------------- #
-# Per-stage failures
-# --------------------------------------------------------------------------- #
 
 
 class FetchError(PipelineError):

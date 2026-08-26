@@ -138,10 +138,6 @@ class HostRateLimiter:
         #: to the local primitives.
         self._shared = shared.connect()
 
-    # ------------------------------------------------------------------ #
-    # Acquisition
-    # ------------------------------------------------------------------ #
-
     @contextmanager
     def slot(self, url: str) -> Iterator[float]:
         """Hold a request slot for this URL's host for the body of the block.
@@ -164,8 +160,6 @@ class HostRateLimiter:
         finally:
             state.last_request = time.monotonic()
             self._release_slot(state, host, lease)
-
-    # -- concurrency, shared when it can be ----------------------------- #
 
     def _acquire_slot(self, state: "_HostState", host: str) -> Optional[str]:
         """Block until this host is under its concurrency cap.
@@ -258,10 +252,6 @@ class HostRateLimiter:
             return 0.0
         time.sleep(state.min_gap - elapsed)
         return state.min_gap - elapsed
-
-    # ------------------------------------------------------------------ #
-    # Feedback from the server
-    # ------------------------------------------------------------------ #
 
     def apply_crawl_delay(self, url: str, delay: Optional[float]) -> None:
         """Adopt a robots.txt ``Crawl-delay`` — but only ever to go slower."""

@@ -86,11 +86,6 @@ def index():
     return idx
 
 
-# --------------------------------------------------------------------------- #
-# The fast path
-# --------------------------------------------------------------------------- #
-
-
 def test_an_exact_name_never_reaches_the_embedder(index):
     assert index.seeds("Acme Corporation") == ["Acme Corporation"]
     assert index._table.vector_searches == 0
@@ -150,11 +145,6 @@ def test_a_failing_exact_lookup_falls_through_rather_than_failing(index):
 class _Embedder:
     def embed_query(self, text):
         return [0.1, 0.2, 0.3]
-
-
-# --------------------------------------------------------------------------- #
-# Warming the agents worker
-# --------------------------------------------------------------------------- #
 
 
 def test_the_agents_worker_warms_and_others_do_not(monkeypatch):

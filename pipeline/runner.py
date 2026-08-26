@@ -65,10 +65,6 @@ class Pipeline:
         self.drift = drift or DriftMonitor(database=database)
         self.on_progress = on_progress
 
-    # ------------------------------------------------------------------ #
-    # Entry points
-    # ------------------------------------------------------------------ #
-
     def run_url(
         self,
         url: str,
@@ -118,10 +114,6 @@ class Pipeline:
                 self.run_item(item, prompt, schema, report=report, **options)
         report.metrics = metrics.snapshot()
         return report.finish()
-
-    # ------------------------------------------------------------------ #
-    # One item, all stages
-    # ------------------------------------------------------------------ #
 
     def run_item(
         self,
@@ -194,10 +186,6 @@ class Pipeline:
         return self._finish(item, report, started, children_only=follow_children,
                             prompt=prompt, schema=schema, local_only=local_only,
                             allowed_tiers=allowed_tiers)
-
-    # ------------------------------------------------------------------ #
-    # Stages
-    # ------------------------------------------------------------------ #
 
     def _acquire(self, item: ExtractionItem, *, force_dynamic: bool) -> ExtractionItem:
         """Get the bytes — or, for a media platform, the transcript directly."""
@@ -291,10 +279,6 @@ class Pipeline:
         if raw_id:
             item.metadata["raw_id"] = raw_id
 
-    # ------------------------------------------------------------------ #
-    # Children
-    # ------------------------------------------------------------------ #
-
     def _run_children(
         self,
         item: ExtractionItem,
@@ -351,10 +335,6 @@ class Pipeline:
                 # the parent has already produced a usable record.
                 child.fail_from(exc)
                 log.warning("runner.child_failed", url=child.url, error=str(exc)[:200])
-
-    # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
 
     def _finish(
         self,

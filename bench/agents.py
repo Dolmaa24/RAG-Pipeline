@@ -53,7 +53,6 @@ class Case:
 
 
 CASES: list[Case] = [
-    # -- single-hop: one retrieval is enough ------------------------------- #
     Case("acme_target", "single_hop",
          "What did Acme Corporation acquire?", ("beta industries",)),
     Case("northwind_price", "single_hop",
@@ -63,7 +62,6 @@ CASES: list[Case] = [
     Case("quarterly_revenue", "single_hop",
          "What was the quarterly revenue in the Acme report?", ("42.5",)),
 
-    # -- multi-hop: the second step depends on the first -------------------- #
     Case("acme_two_part", "multi_hop",
          "What did Acme Corporation acquire, and what was the quarterly revenue?",
          ("beta industries", "42.5")),
@@ -75,7 +73,6 @@ CASES: list[Case] = [
          "Acme acquired a company — where is the company Northwind acquired based?",
          ("rotterdam",)),
 
-    # -- enumeration: no entity to start from ------------------------------- #
     Case("which_acquisitions", "enumeration",
          "Which acquisitions does the corpus describe?",
          ("beta industries", "fabrikam")),
@@ -86,7 +83,6 @@ CASES: list[Case] = [
          "Which companies acquired which other companies?",
          ("acme", "northwind")),
 
-    # -- unanswerable: refusing is the right answer ------------------------- #
     Case("capital_mongolia", "unanswerable",
          "What is the capital of Mongolia?", unanswerable=True),
     Case("acme_founder", "unanswerable",
@@ -94,11 +90,6 @@ CASES: list[Case] = [
     Case("contoso", "unanswerable",
          "What did Contoso Shipping acquire?", unanswerable=True),
 ]
-
-
-# --------------------------------------------------------------------------- #
-# Running each path
-# --------------------------------------------------------------------------- #
 
 
 @dataclass
@@ -157,11 +148,6 @@ def investigate(case: Case, *, rounds: int, verify: bool) -> Run:
         sources=len(result.sources),
         flagged=len(result.verdict.unsupported) if result.verdict else 0,
     )
-
-
-# --------------------------------------------------------------------------- #
-# Scoring
-# --------------------------------------------------------------------------- #
 
 
 def graded(case: Case, run: Run) -> str:

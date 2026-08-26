@@ -64,10 +64,6 @@ class CloudDatabase:
         self._lock = threading.RLock()
         self._warned = False
 
-    # ------------------------------------------------------------------ #
-    # Connection
-    # ------------------------------------------------------------------ #
-
     @property
     def is_configured(self) -> bool:
         return bool(self.uri) and "<" not in (self.uri or "")
@@ -120,10 +116,6 @@ class CloudDatabase:
             return "tls=false" not in uri and "ssl=false" not in uri
         return "tls=true" in uri or "ssl=true" in uri
 
-    # ------------------------------------------------------------------ #
-    # Collections
-    # ------------------------------------------------------------------ #
-
     def get_collection(self):
         self.ensure_indexes()
         return self._database()[config.MONGO_COLLECTION]
@@ -150,10 +142,6 @@ class CloudDatabase:
         from gridfs import GridFS
 
         return GridFS(self._database(), collection=config.GRIDFS_BUCKET)
-
-    # ------------------------------------------------------------------ #
-    # Indexes
-    # ------------------------------------------------------------------ #
 
     def ensure_indexes(self) -> None:
         """Create every index once per process. Safe to call on every write."""
@@ -210,10 +198,6 @@ class CloudDatabase:
                 # must not stop the pipeline writing rows.
                 log.warning("database.index_failed", error=repr(exc))
                 self._indexed = True
-
-    # ------------------------------------------------------------------ #
-    # Writing
-    # ------------------------------------------------------------------ #
 
     def save_item(self, item, *, run_id: Optional[str] = None) -> Optional[str]:
         """Persist one finished :class:`~models.ExtractionItem` with provenance.
@@ -334,10 +318,6 @@ class CloudDatabase:
         }
         return self._upsert(record)
 
-    # ------------------------------------------------------------------ #
-    # Raw store
-    # ------------------------------------------------------------------ #
-
     def store_raw(self, item) -> Optional[str]:
         """Keep the fetched bytes so the document can be re-parsed later."""
         if not config.RAW_STORE_ENABLED or not item.raw_bytes:
@@ -373,10 +353,6 @@ class CloudDatabase:
         except Exception:
             return None
 
-    # ------------------------------------------------------------------ #
-    # Runs and failures
-    # ------------------------------------------------------------------ #
-
     def save_run(self, report) -> Optional[str]:
         payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
         payload["saved_at"] = _utcnow()
@@ -403,10 +379,6 @@ class CloudDatabase:
         except Exception:
             log.warning("database.dead_letter_to_file", url=url, task=task, path=str(DEAD_LETTER_PATH))
             self._write_fallback({"kind": "dead_letter", **record}, DEAD_LETTER_PATH)
-
-    # ------------------------------------------------------------------ #
-    # Reading
-    # ------------------------------------------------------------------ #
 
     def recent(self, limit: int = 25, *, domain: Optional[str] = None) -> list[dict]:
         query = {"domain": domain} if domain else {}

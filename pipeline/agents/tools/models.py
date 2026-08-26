@@ -101,11 +101,6 @@ class FilterArgs(BaseModel):
         )
 
 
-# --------------------------------------------------------------------------- #
-# corpus_profile
-# --------------------------------------------------------------------------- #
-
-
 class ProfileArgs(BaseModel):
     """No arguments. Declared anyway so every tool has the same shape."""
 
@@ -147,11 +142,6 @@ class ProfileResult(BaseModel):
         else:
             lines.append("No filter values are populated; do not filter.")
         return _clip("\n".join(lines), max_chars)
-
-
-# --------------------------------------------------------------------------- #
-# search_corpus
-# --------------------------------------------------------------------------- #
 
 
 class SearchArgs(FilterArgs):
@@ -204,11 +194,6 @@ class SearchResult(BaseModel):
         return _clip("\n\n".join(parts), max_chars)
 
 
-# --------------------------------------------------------------------------- #
-# answer_from_corpus
-# --------------------------------------------------------------------------- #
-
-
 class AnswerArgs(FilterArgs):
     question: str = Field(..., min_length=1)
     limit: count_up_to(50) = Field(8, ge=1, le=50)
@@ -236,11 +221,6 @@ class AnswerResult(BaseModel):
             if lines:
                 head += "\n\nSources:\n" + "\n".join(lines)
         return _clip(head, max_chars)
-
-
-# --------------------------------------------------------------------------- #
-# graph_neighbors / graph_path
-# --------------------------------------------------------------------------- #
 
 
 class NeighborsArgs(BaseModel):
@@ -288,11 +268,6 @@ class GraphResult(BaseModel):
         return _clip("\n".join(self.edges), max_chars)
 
 
-# --------------------------------------------------------------------------- #
-# fetch_chunk
-# --------------------------------------------------------------------------- #
-
-
 class ChunkArgs(BaseModel):
     chunk_id: str = Field(
         ..., min_length=1,
@@ -311,11 +286,6 @@ class ChunkResult(BaseModel):
         if not self.found:
             return f"No chunk with id {self.chunk_id!r}."
         return _clip(f"({self.source})\n{self.text}", max_chars)
-
-
-# --------------------------------------------------------------------------- #
-# detect_url
-# --------------------------------------------------------------------------- #
 
 
 class DetectArgs(BaseModel):
@@ -340,11 +310,6 @@ class DetectResult(BaseModel):
             f"({self.reason}); likely a {self.likely_kind}.{known}",
             max_chars,
         )
-
-
-# --------------------------------------------------------------------------- #
-# The queued tools
-# --------------------------------------------------------------------------- #
 
 
 class SitemapArgs(BaseModel):

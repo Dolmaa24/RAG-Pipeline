@@ -67,7 +67,6 @@ class LLMResponse:
     warnings: list[str] = field(default_factory=list)
 
 
-# --------------------------------------------------------------------------- #
 # Tool calling
 #
 # complete_json() answers one question and forgets it: content in, shape out.
@@ -79,7 +78,6 @@ class LLMResponse:
 # ToolSpec. This layer must not import pipeline.agents: the agents are built on
 # the model layer, and an import the other way would make the two circular and
 # the model layer untestable on its own.
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(slots=True)

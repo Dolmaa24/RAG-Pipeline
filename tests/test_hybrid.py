@@ -58,11 +58,6 @@ class _Embedder:
         return [0.1, 0.2, 0.3]
 
 
-# --------------------------------------------------------------------------- #
-# RRF
-# --------------------------------------------------------------------------- #
-
-
 def test_rrf_rewards_a_document_both_legs_found():
     """Agreement between two independent methods is the strongest signal."""
     dense = [_chunk("a", 1.0), _chunk("b", 0.9), _chunk("c", 0.8)]
@@ -111,11 +106,6 @@ def test_fusion_keeps_the_best_rank_across_subqueries():
     assert found.dense_rank == 0
 
 
-# --------------------------------------------------------------------------- #
-# Alpha
-# --------------------------------------------------------------------------- #
-
-
 def test_alpha_one_is_pure_vector():
     dense = [_chunk("a", 0.9), _chunk("b", 0.1)]
     lexical = [_chunk("b", 1.0, "bm25")]
@@ -141,11 +131,6 @@ def test_alpha_is_clamped():
     dense = [_chunk("a", 1.0)]
     assert alpha_fusion(dense, [], alpha=5.0)[0].score == 1.0
     assert alpha_fusion(dense, [], alpha=-3.0)[0].score == 0.0
-
-
-# --------------------------------------------------------------------------- #
-# The retriever
-# --------------------------------------------------------------------------- #
 
 
 def test_all_subqueries_embed_in_one_batch(fake_store):

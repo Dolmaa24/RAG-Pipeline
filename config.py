@@ -22,9 +22,6 @@ class EngineConfig(BaseSettings):
 
     PIPELINE_VERSION: str = "3.0.0"
 
-    # ------------------------------------------------------------------ #
-    # Identity
-    # ------------------------------------------------------------------ #
     #: Sent on every request. An honest, contactable UA is what turns "some bot
     #: is hammering us" into an email rather than a firewall rule. Override
     #: CONTACT_URL with something a site owner can actually reach you at.
@@ -39,9 +36,6 @@ class EngineConfig(BaseSettings):
     )
     SPOOF_BROWSER_UA: bool = False
 
-    # ------------------------------------------------------------------ #
-    # Phase 1 — compliance and safety
-    # ------------------------------------------------------------------ #
     RESPECT_ROBOTS: bool = True
     #: What to do when robots.txt itself is unreachable (5xx / network error).
     #: RFC 9309 says deny; "allow" is the common reading and the default here,
@@ -77,9 +71,6 @@ class EngineConfig(BaseSettings):
     HOST_ALLOWLIST: str = ""
     HOST_DENYLIST: str = ""
 
-    # ------------------------------------------------------------------ #
-    # Fetching
-    # ------------------------------------------------------------------ #
     PROXY_URL: Optional[str] = None
     #: Allow TLS handshakes with servers that predate RFC 5746 secure
     #: renegotiation. OpenSSL 3 refuses those outright, which is why a site can
@@ -103,17 +94,11 @@ class EngineConfig(BaseSettings):
     #: Bodies over this are streamed to a temp file instead of held in memory.
     STREAM_THRESHOLD_BYTES: int = 8 * 1024 * 1024
 
-    # ------------------------------------------------------------------ #
-    # Phase 2 — universal input
-    # ------------------------------------------------------------------ #
     #: How deep to recurse into archives, emails, and feeds. 0 disables it.
     MAX_RECURSION_DEPTH: int = 2
     MAX_ARCHIVE_MEMBERS: int = 200
     MAX_FEED_ENTRIES: int = 100
     MAX_SITEMAP_URLS: int = 5000
-    # ------------------------------------------------------------------ #
-    # MCP: the tool catalog, exposed to external clients
-    # ------------------------------------------------------------------ #
     #: Both default off. Read-only tools touch what is already indexed and are
     #: always safe to expose; these two let a client reach the outside world or
     #: change the corpus, which is a decision an operator makes rather than
@@ -138,9 +123,6 @@ class EngineConfig(BaseSettings):
     LIVESTREAM_MAX_SEGMENTS: int = 60
     LIVESTREAM_MAX_MINUTES: int = 120
 
-    # ------------------------------------------------------------------ #
-    # Phase 3 — extraction cascade
-    # ------------------------------------------------------------------ #
     ENABLE_TIER0_CACHE: bool = True
     ENABLE_TIER1_STRUCTURED: bool = True
     ENABLE_TIER2_SELECTORS: bool = True
@@ -273,9 +255,6 @@ class EngineConfig(BaseSettings):
     MAX_CHUNK_SIZE: int = 12000  # characters of text sent to the model
     LLM_MAX_ATTEMPTS: int = 2
 
-    # ------------------------------------------------------------------ #
-    # Phase 4 — performance
-    # ------------------------------------------------------------------ #
     HTTP_CACHE_ENABLED: bool = True
     HTTP_CACHE_TTL_SECONDS: int = 86400
     EXTRACTION_CACHE_ENABLED: bool = True
@@ -298,9 +277,6 @@ class EngineConfig(BaseSettings):
     #: not the cpu pool's. Neither existing queue is right.
     AGENTS_QUEUE: str = "agents"
 
-    # ------------------------------------------------------------------ #
-    # Phase 5 — trust
-    # ------------------------------------------------------------------ #
     VALIDATE_OUTPUT: bool = True
     #: Reject rather than store a record that fails validation. Off by default:
     #: a flagged row you can inspect beats a row that silently vanished.
@@ -313,9 +289,6 @@ class EngineConfig(BaseSettings):
     DRIFT_MIN_SAMPLES: int = 20
     DRIFT_FILL_RATE_DROP: float = 0.3
 
-    # ------------------------------------------------------------------ #
-    # Phase 6 — indexing for retrieval
-    # ------------------------------------------------------------------ #
     #: On by default: retrieval is the point of indexing, and a feature that is
     #: off by default is a feature nobody has. The cost is a ~130 MB embedding
     #: model resident per cpu worker and a local vector table. Turn it off for a
@@ -366,9 +339,6 @@ class EngineConfig(BaseSettings):
     INDEX_IVF_PARTITIONS: int = 256
     INDEX_PQ_SUB_VECTORS: int = 48
 
-    # ------------------------------------------------------------------ #
-    # Phase 7 — retrieval
-    # ------------------------------------------------------------------ #
     #: Rewriting costs a model call. Queries shorter than this with no
     #: conjunction, comparative or date expression skip it entirely.
     RETRIEVE_REWRITE_ENABLED: bool = True
@@ -396,9 +366,6 @@ class EngineConfig(BaseSettings):
     RETRIEVE_NPROBES: int = 20
     RETRIEVE_REFINE_FACTOR: int = 10
 
-    # ------------------------------------------------------------------ #
-    # Phase 8 — answering
-    # ------------------------------------------------------------------ #
     #: How many retrieved passages are put in front of the model. More context
     #: is not more accuracy: past a handful the answer starts drifting toward
     #: whatever is longest rather than whatever is relevant.
@@ -408,9 +375,6 @@ class EngineConfig(BaseSettings):
     #: crowds out the other five.
     ANSWER_MAX_PASSAGE_CHARS: int = 1200
 
-    # ------------------------------------------------------------------ #
-    # Phase 7 — knowledge graph
-    # ------------------------------------------------------------------ #
     #: On by default: the graph is half of what "hybrid + graph retrieval" means,
     #: and a graph nobody builds answers no questions. It costs one model call
     #: per MAX_CHUNK_SIZE window of a document, so it is the slowest part of
@@ -455,9 +419,6 @@ class EngineConfig(BaseSettings):
     #: read-only either way, so the cost of it being wrong is latency.
     GRAPH_CYPHER_AGENT: bool = False
 
-    # ------------------------------------------------------------------ #
-    # Infrastructure
-    # ------------------------------------------------------------------ #
     REDIS_URL: str = "redis://localhost:6379/0"
     MONGO_URI: Optional[str] = None
     MONGO_DB_NAME: str = "ai_scraping_pipeline"
@@ -473,10 +434,6 @@ class EngineConfig(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: Literal["text", "json"] = "text"
-
-    # ------------------------------------------------------------------ #
-    # Derived
-    # ------------------------------------------------------------------ #
 
     @field_validator("MIN_FILL_RATE", "SPEC_DRIFT_FILL_RATE")
     @classmethod

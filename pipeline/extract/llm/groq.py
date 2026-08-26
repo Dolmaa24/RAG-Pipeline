@@ -52,8 +52,6 @@ class GroqBackend:
         self.timeout = config.GROQ_TIMEOUT
         self._client = None
 
-    # ------------------------------------------------------------------ #
-
     def available(self) -> bool:
         if not self._api_key or config.LOCAL_ONLY:
             return False
@@ -86,10 +84,6 @@ class GroqBackend:
             temperature=0.0,
             max_tokens=config.GROQ_MAX_OUTPUT_TOKENS,
         )
-
-    # ------------------------------------------------------------------ #
-    # Tool calling
-    # ------------------------------------------------------------------ #
 
     def supports_tools(self) -> bool:
         """Every model Groq serves through this API accepts a tools array.
@@ -164,8 +158,6 @@ class GroqBackend:
             return False
         message = str(exc).lower()
         return "json_schema" in message or "response format" in message or "response_format" in message
-
-    # ------------------------------------------------------------------ #
 
     def complete_json(
         self,
@@ -260,8 +252,6 @@ class GroqBackend:
             schema_enforced=enforced,
         )
         return result
-
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _classify(exc: Exception) -> Exception:

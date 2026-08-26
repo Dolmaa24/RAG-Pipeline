@@ -106,8 +106,6 @@ class MediaProcessor:
             item.record_timing("media", time.perf_counter() - started)
             gc.collect()
 
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _probe(url: str) -> Optional[dict]:
         """Ask yt-dlp what this is without downloading it.
@@ -333,8 +331,6 @@ class LiveStreamProcessor:
         )
         item.compute_content_hash()
         return item
-
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _resolve(url: str) -> tuple[Optional[str], dict]:

@@ -77,8 +77,6 @@ class HtmlHandler(BaseHandler):
             return item.fail(Stage.PARSE, "parsed document contained no readable text")
         return item
 
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _decode(item: ExtractionItem) -> ExtractionItem:
         from pipeline.decoder import TextDecoder

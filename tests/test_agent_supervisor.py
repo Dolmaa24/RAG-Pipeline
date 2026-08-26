@@ -72,11 +72,6 @@ def _supervisor(answerer, **kwargs):
     return Supervisor(backend=Quiet(), answerer=answerer, **kwargs)
 
 
-# --------------------------------------------------------------------------- #
-# Roles
-# --------------------------------------------------------------------------- #
-
-
 def test_a_read_only_run_has_only_the_corpus_specialist():
     assert [role.name for role in available(Budget())] == ["corpus"]
 
@@ -100,11 +95,6 @@ def test_a_specialist_sees_only_its_own_tools():
     assert "search_corpus" in names
     assert "crawl_site" not in names
     assert "extract_url" not in names
-
-
-# --------------------------------------------------------------------------- #
-# The sufficiency loop — the point of the phase
-# --------------------------------------------------------------------------- #
 
 
 def test_a_sufficient_first_round_stops_there():
@@ -153,11 +143,6 @@ def test_an_empty_question_costs_nothing():
 
     assert result.stopped == "empty question"
     assert answerer.asked == []
-
-
-# --------------------------------------------------------------------------- #
-# Carrying leads between rounds
-# --------------------------------------------------------------------------- #
 
 
 def test_names_the_graph_surfaced_are_read_out_of_a_trace():
@@ -215,11 +200,6 @@ def test_the_second_round_is_told_what_is_missing_not_what_was_found():
     assert "Look for what is missing" in second[0]
 
 
-# --------------------------------------------------------------------------- #
-# Acquisition is gated, not chosen
-# --------------------------------------------------------------------------- #
-
-
 def test_acquisition_never_runs_on_a_read_only_budget():
     answerer = Reply(*[_answer("no", sufficient=False) for _ in range(5)])
     result = _supervisor(answerer, max_rounds=3).investigate(
@@ -260,11 +240,6 @@ def test_acquisition_is_not_attempted_without_a_url():
 
     roles = [step["role"] for step in result.trace if step["kind"] == "specialist"]
     assert "acquisition" not in roles
-
-
-# --------------------------------------------------------------------------- #
-# The verifier
-# --------------------------------------------------------------------------- #
 
 
 def test_decimals_and_abbreviations_do_not_split_a_sentence():
@@ -337,11 +312,6 @@ def test_the_verdict_serialises_for_an_api():
     assert payload["checked"] == 2
 
 
-# --------------------------------------------------------------------------- #
-# The whole result
-# --------------------------------------------------------------------------- #
-
-
 def test_the_investigation_serialises_with_its_reasoning():
     answerer = Reply(_answer("Acme acquired Beta.", sufficient=True))
     payload = _supervisor(answerer).investigate("q").to_dict()
@@ -351,11 +321,6 @@ def test_the_investigation_serialises_with_its_reasoning():
     assert payload["rounds"] == 1
     assert isinstance(payload["trace"], list)
     assert payload["sources"]
-
-
-# --------------------------------------------------------------------------- #
-# Leads: what they are for, and what they are not
-# --------------------------------------------------------------------------- #
 
 
 def test_a_place_already_visited_is_not_offered_as_a_lead():

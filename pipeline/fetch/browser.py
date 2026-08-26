@@ -72,11 +72,6 @@ def _submit(job: Callable):
     return future.result()
 
 
-# --------------------------------------------------------------------------- #
-# Runs on the owner thread only
-# --------------------------------------------------------------------------- #
-
-
 def _ensure_browser():
     global _playwright, _browser
     if _browser is not None and _browser.is_connected():
@@ -149,11 +144,6 @@ def _shutdown_on_owner() -> None:
         except Exception:  # pragma: no cover
             pass
         _playwright = None
-
-
-# --------------------------------------------------------------------------- #
-# Public API — callable from any thread
-# --------------------------------------------------------------------------- #
 
 
 def render(url: str, *, wait_until: str = "networkidle") -> tuple[Optional[int], dict, str, str]:

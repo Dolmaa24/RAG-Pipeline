@@ -101,7 +101,6 @@ def index_text(
         report.truncated = True
         text = text[: config.INDEX_MAX_TEXT_CHARS]
 
-    # --- preprocess ---------------------------------------------------- #
     stage = time.perf_counter()
     preprocessor = preprocessor or DocumentPreprocessor()
     document = preprocessor.process(
@@ -121,7 +120,6 @@ def index_text(
         log.warning("index.empty_after_clean", source=source)
         return report
 
-    # --- chunk ---------------------------------------------------------- #
     stage = time.perf_counter()
     chunker = chunker or DocumentChunker()
     chunked = chunker.chunk(document, strategy=strategy, local_only=local_only)
@@ -133,13 +131,11 @@ def index_text(
         report.warnings.append("chunking produced nothing")
         return report
 
-    # --- embed ---------------------------------------------------------- #
     stage = time.perf_counter()
     embedder = embedder or DocumentEmbedder()
     chunked = embedder.embed(chunked)
     report.timings_ms["embed"] = round((time.perf_counter() - stage) * 1000, 2)
 
-    # --- store ---------------------------------------------------------- #
     stage = time.perf_counter()
     store = store or LanceStore()
     report.stored = store.upsert_document(chunked)

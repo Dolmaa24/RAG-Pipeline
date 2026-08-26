@@ -35,11 +35,6 @@ def hunting(*extensions: str, **kw) -> CrawlScope:
     )
 
 
-# --------------------------------------------------------------------------- #
-# The regression
-# --------------------------------------------------------------------------- #
-
-
 def test_a_crawl_naming_no_file_types_collects_the_documents_it_finds():
     assert verdict(everything(), PDF) is LinkVerdict.COLLECT
 
@@ -83,11 +78,6 @@ def test_page_furniture_is_never_collected():
         assert verdict(scope, url) is LinkVerdict.SKIP, url
 
 
-# --------------------------------------------------------------------------- #
-# A named file hunt is the narrower shape, and stays narrow
-# --------------------------------------------------------------------------- #
-
-
 def test_a_file_hunt_collects_only_what_it_named():
     scope = hunting("pdf")
     assert verdict(scope, PDF) is LinkVerdict.COLLECT
@@ -97,11 +87,6 @@ def test_a_file_hunt_collects_only_what_it_named():
 def test_a_file_hunt_still_walks_pages_for_their_links():
     """Pages are the map, not the destination."""
     assert verdict(hunting("pdf"), PAGE) is LinkVerdict.FOLLOW
-
-
-# --------------------------------------------------------------------------- #
-# Depth: the two shapes differ deliberately
-# --------------------------------------------------------------------------- #
 
 
 def test_a_named_target_is_collected_past_the_depth_limit():
@@ -114,11 +99,6 @@ def test_an_implicitly_collected_document_stays_within_the_depth_limit():
     scope = everything()
     assert verdict(scope, PDF, depth=0) is LinkVerdict.COLLECT
     assert verdict(scope, PDF, depth=1) is LinkVerdict.SKIP
-
-
-# --------------------------------------------------------------------------- #
-# Scope rules apply to documents too
-# --------------------------------------------------------------------------- #
 
 
 def test_an_off_site_document_is_refused():

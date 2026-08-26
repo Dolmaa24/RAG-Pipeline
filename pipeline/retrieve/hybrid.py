@@ -92,11 +92,6 @@ def _as_chunk(row: dict, leg: str, rank: int) -> ScoredChunk:
     return chunk
 
 
-# --------------------------------------------------------------------------- #
-# Fusion
-# --------------------------------------------------------------------------- #
-
-
 def reciprocal_rank_fusion(
     rankings: list[list[ScoredChunk]], *, k: Optional[int] = None
 ) -> list[ScoredChunk]:
@@ -171,11 +166,6 @@ def _absorb(target: ScoredChunk, other: ScoredChunk) -> None:
         target.bm25_rank = (
             other.bm25_rank if target.bm25_rank is None else min(target.bm25_rank, other.bm25_rank)
         )
-
-
-# --------------------------------------------------------------------------- #
-# The retriever
-# --------------------------------------------------------------------------- #
 
 
 class HybridRetriever:

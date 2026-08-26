@@ -51,11 +51,6 @@ EXPECTED = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# The catalog
-# --------------------------------------------------------------------------- #
-
-
 def test_every_planned_tool_is_registered_with_its_planned_effect():
     registered = {spec.name: spec.effect for spec in catalog(ALL_EFFECTS)}
     assert registered == EXPECTED
@@ -99,11 +94,6 @@ def test_describe_all_is_the_shape_a_tool_api_wants():
 def test_get_names_the_alternatives_when_a_tool_does_not_exist():
     with pytest.raises(ToolError, match="search_corpus"):
         get("serch_corpus")
-
-
-# --------------------------------------------------------------------------- #
-# Registration is checked at import, not at first call
-# --------------------------------------------------------------------------- #
 
 
 @pytest.fixture
@@ -153,11 +143,6 @@ def test_registering_the_same_name_twice_is_refused(scratch_registry):
     make()
     with pytest.raises(ValueError, match="already registered"):
         make()
-
-
-# --------------------------------------------------------------------------- #
-# invoke(): the effect gate, and failing without raising
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
@@ -230,11 +215,6 @@ def test_a_successful_call_records_what_a_trace_needs():
     assert isinstance(row["observation"], str)
 
 
-# --------------------------------------------------------------------------- #
-# Observations are truncated at the tool boundary
-# --------------------------------------------------------------------------- #
-
-
 def test_a_long_result_is_clipped_where_the_budget_is_spent():
     # An 8000 TPM ceiling is spent by whatever enters the message history, so
     # trimming has to happen before that, not in the prompt builder.
@@ -251,11 +231,6 @@ def test_an_empty_search_says_what_to_try_next():
     rendered = SearchResult(query="nothing").render()
     assert "No results" in rendered
     assert "without it" in rendered  # names the filter as the likely cause
-
-
-# --------------------------------------------------------------------------- #
-# Flat scalars back into the filter the retriever wants
-# --------------------------------------------------------------------------- #
 
 
 def test_scalars_become_single_valued_lists():
@@ -280,11 +255,6 @@ def test_dates_pass_through_as_scalars():
     compiled = FilterArgs(date_from="2026-01-01", date_to="2026-03-31").to_filter()
     assert compiled.date_from == "2026-01-01"
     assert compiled.date_to == "2026-03-31"
-
-
-# --------------------------------------------------------------------------- #
-# index_document
-# --------------------------------------------------------------------------- #
 
 
 def test_indexing_queues_rather_than_blocking(monkeypatch):
@@ -343,11 +313,6 @@ def test_indexing_needs_write_permission():
     call = invoke("index_document", {"text": "x", "source": "s"})
     assert not call.ok
     assert "write" in call.error.lower()
-
-
-# --------------------------------------------------------------------------- #
-# Counts a model expresses in words
-# --------------------------------------------------------------------------- #
 
 
 def _tools_with_a_limit():

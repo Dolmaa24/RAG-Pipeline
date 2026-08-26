@@ -22,7 +22,6 @@ class ChunkMetadata(BaseModel):
     chunk_strategy: str = "unknown"
     embedding_model: str = ""
 
-    # --- filterable ---
     # Empty means "not known", which a filter reads as "do not exclude this".
     # A document with no department is not in department "" — it is a document
     # whose department nobody recorded, and filtering it out on that basis

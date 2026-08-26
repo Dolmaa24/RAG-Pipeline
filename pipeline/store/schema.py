@@ -58,7 +58,6 @@ def arrow_schema(dimension: int) -> "pa.Schema":
             pa.field(ID_FIELD, pa.string()),
             pa.field(VECTOR_FIELD, pa.list_(pa.float32(), dimension)),
             pa.field(TEXT_FIELD, pa.string()),
-            # --- filterable ---
             pa.field("source", pa.string()),
             pa.field("doc_type", pa.string()),
             pa.field("department", pa.string()),
@@ -67,7 +66,6 @@ def arrow_schema(dimension: int) -> "pa.Schema":
             pa.field("region", pa.string()),
             pa.field("permission_level", pa.string()),
             pa.field("language", pa.string()),
-            # --- provenance ---
             pa.field("content_hash", pa.string()),
             pa.field("page_no", pa.int32()),
             pa.field("section_name", pa.string()),

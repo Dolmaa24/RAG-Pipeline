@@ -76,7 +76,6 @@ celery_app.conf.update(
     # keeps Redis from growing without bound.
     result_expires=86400,
 
-    # --- routing ---------------------------------------------------------- #
     task_default_queue=config.IO_QUEUE,
     task_routes={
         "tasks.fetch_*": {"queue": config.IO_QUEUE},
@@ -103,7 +102,6 @@ celery_app.conf.update(
         "tasks.investigate": {"queue": config.AGENTS_QUEUE},
     },
 
-    # --- limits ----------------------------------------------------------- #
     # A blocked fetch, a long transcript and a slow local model add up; cap it
     # so a wedged task cannot occupy a worker forever. The live-stream task
     # overrides these with its own, longer, limits.

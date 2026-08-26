@@ -94,10 +94,6 @@ class DocumentHandler(BaseHandler):
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
-    # ------------------------------------------------------------------ #
-    # PDF
-    # ------------------------------------------------------------------ #
-
     def _read_pdf(self, path: str, item: ExtractionItem) -> tuple[str, dict]:
         try:
             import pymupdf
@@ -170,10 +166,6 @@ class DocumentHandler(BaseHandler):
         item.metadata["ocr"] = True
         return item
 
-    # ------------------------------------------------------------------ #
-    # Everything else
-    # ------------------------------------------------------------------ #
-
     def _read_generic(self, path: str, item: ExtractionItem) -> tuple[str, dict]:
         if config.DOCUMENT_BACKEND == "docling":
             return self._read_docling(path)
@@ -209,8 +201,6 @@ class DocumentHandler(BaseHandler):
         if not text:
             raise ParseError("docling produced no text")
         return text, {"converter": "docling"}
-
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _convert_legacy(path: str, workdir: str, target: str) -> str:

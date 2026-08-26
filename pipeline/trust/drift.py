@@ -78,8 +78,6 @@ class DriftMonitor:
     _baseline: dict[str, dict[str, float]] = field(default_factory=dict, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
-    # ------------------------------------------------------------------ #
-
     def observe(self, url: str, schema_hash: str, record: dict) -> list[DriftAlert]:
         """Record one extraction. Returns any alerts it triggered."""
         if not config.DRIFT_ENABLED or not record:
@@ -127,8 +125,6 @@ class DriftMonitor:
             log.error("drift.detected", domain=alert.domain, field=alert.field,
                       baseline=alert.baseline, current=alert.current, drop=alert.drop)
         return alerts
-
-    # ------------------------------------------------------------------ #
 
     def report(self, url: str = "", schema_hash: str = "") -> dict:
         with self._lock:

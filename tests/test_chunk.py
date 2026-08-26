@@ -8,11 +8,6 @@ from pipeline.chunk.chunker import DocumentChunker
 from pipeline.chunk.strategies import fixed_chunk, hierarchical_chunk, llm_chunk
 
 
-# --------------------------------------------------------------------------- #
-# The router
-# --------------------------------------------------------------------------- #
-
-
 def test_headings_choose_hierarchical(make_doc):
     text = "\n# One\nalpha\n\n## Two\nbeta\n\n### Three\ngamma\n"
     assert DocumentChunker().decide_strategy(make_doc(text)) == "hierarchical"
@@ -56,11 +51,6 @@ def test_unknown_strategy_is_rejected(make_doc):
         DocumentChunker().chunk(make_doc("text"), strategy="telepathy")
 
 
-# --------------------------------------------------------------------------- #
-# Mechanical strategies
-# --------------------------------------------------------------------------- #
-
-
 def test_fixed_chunk_splits_and_carries_metadata(make_doc):
     doc = make_doc("word " * 2000, page_no=3)
     chunks = fixed_chunk(doc, chunk_size=200, chunk_overlap=20)
@@ -81,11 +71,6 @@ def test_chunk_records_the_strategy_it_used(make_doc):
     result = DocumentChunker().chunk(make_doc("word " * 500), strategy="fixed")
     assert result.strategy == "fixed"
     assert len(result.chunks) > 1
-
-
-# --------------------------------------------------------------------------- #
-# The model-assisted strategy
-# --------------------------------------------------------------------------- #
 
 
 class _Response:

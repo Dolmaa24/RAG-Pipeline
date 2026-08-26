@@ -61,11 +61,6 @@ poll_task before searching for what they produced.\
 """
 
 
-# --------------------------------------------------------------------------- #
-# Registry -> MCP
-# --------------------------------------------------------------------------- #
-
-
 def allowed_effects() -> list[Effect]:
     """Which effects this server exposes, from settings alone.
 
@@ -172,11 +167,6 @@ def _add_resources(server) -> None:
     def profile() -> str:
         """What the corpus holds, and which filter values exist."""
         return invoke("corpus_profile", {}, allowed=[Effect.READ]).observation
-
-
-# --------------------------------------------------------------------------- #
-# Transports
-# --------------------------------------------------------------------------- #
 
 
 def main() -> None:

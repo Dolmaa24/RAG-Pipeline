@@ -125,10 +125,6 @@ class ResilientFetcher:
         self.breaker = breaker or default_breaker
         self.cache = cache or default_cache
 
-    # ------------------------------------------------------------------ #
-    # Public entry point
-    # ------------------------------------------------------------------ #
-
     def fetch(self, item: ExtractionItem, force_dynamic: bool = False) -> ExtractionItem:
         started = time.perf_counter()
         item.canonical_url = canonicalize(item.url)
@@ -176,10 +172,6 @@ class ResilientFetcher:
         finally:
             item.record_timing("fetch", time.perf_counter() - started)
 
-    # ------------------------------------------------------------------ #
-    # Local path: uploads
-    # ------------------------------------------------------------------ #
-
     def _fetch_upload(self, url: str) -> FetchResult:
         """Read an uploaded file from disk as though it had been fetched."""
         try:
@@ -203,10 +195,6 @@ class ResilientFetcher:
             redirects=[],
             mode=FetchMode.INLINE,
         )
-
-    # ------------------------------------------------------------------ #
-    # Static path
-    # ------------------------------------------------------------------ #
 
     def _fetch_static(self, url: str) -> FetchResult:
         backoff = 1.0
@@ -343,10 +331,6 @@ class ResilientFetcher:
             "Accept-Encoding": "gzip, deflate, br",
         }
 
-    # ------------------------------------------------------------------ #
-    # Browser path
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _should_try_browser(result: FetchResult) -> bool:
         """Is a browser render worth several hundred milliseconds and 300 MB?
@@ -389,8 +373,6 @@ class ResilientFetcher:
         return FetchResult(
             status or 200, headers, body, final_url or url, [], mode=FetchMode.BROWSER
         )
-
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _apply(item: ExtractionItem, result: FetchResult) -> None:

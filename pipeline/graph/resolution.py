@@ -58,7 +58,6 @@ def canonical_key(name: str) -> str:
     return " ".join(parts)
 
 
-
 class EntityResolver:
     """Maps newly extracted entities onto the ones already in the graph."""
 

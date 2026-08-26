@@ -40,11 +40,6 @@ def _extraction() -> KnowledgeGraphExtraction:
     )
 
 
-# --------------------------------------------------------------------------- #
-# The cache itself
-# --------------------------------------------------------------------------- #
-
-
 def test_a_miss_returns_nothing(cache: GraphCache):
     assert cache.get("hash1", "prompt", "model") is None
 
@@ -96,11 +91,6 @@ def test_the_cache_can_be_turned_off(cache: GraphCache, monkeypatch):
 def test_content_key_is_stable_and_content_addressed():
     assert content_key(TEXT) == content_key(TEXT)
     assert content_key(TEXT) != content_key(TEXT + " ")
-
-
-# --------------------------------------------------------------------------- #
-# The extractor using it
-# --------------------------------------------------------------------------- #
 
 
 def test_the_second_extraction_makes_no_model_call(fake_backend):

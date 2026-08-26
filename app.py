@@ -62,7 +62,6 @@ def upload_file(file: UploadFile = File(...)) -> dict:
     return {"url": url}
 
 
-
 class ExtractionRequest(BaseModel):
     url: str = Field(..., min_length=1, description="Any http(s) URL.")
     prompt: str = Field(..., min_length=1, description="What to extract, in plain language.")
@@ -112,7 +111,6 @@ class ExtractionRequest(BaseModel):
             "derived from the document itself."
         ),
     )
-
 
     @field_validator("url")
     @classmethod
@@ -280,11 +278,6 @@ class CrawlRequest(BaseModel):
         }
 
 
-# --------------------------------------------------------------------------- #
-# Health and introspection
-# --------------------------------------------------------------------------- #
-
-
 @app.get("/health", tags=["ops"])
 def health() -> dict[str, Any]:
     """Liveness, plus whether each dependency is actually reachable."""
@@ -395,11 +388,6 @@ def records(
     return {"records": db.recent(limit, domain=domain)}
 
 
-# --------------------------------------------------------------------------- #
-# Extraction
-# --------------------------------------------------------------------------- #
-
-
 @app.post("/api/v1/extract", tags=["extract"], status_code=202)
 def extract(request: ExtractionRequest) -> dict:
     """Queue any URL for extraction. The pipeline works out what it is."""
@@ -487,11 +475,6 @@ def discover(url: str = Query(..., description="A sitemap, feed, or site root"))
     return {"status": "queued", "task_id": task.id}
 
 
-# --------------------------------------------------------------------------- #
-# Crawling
-# --------------------------------------------------------------------------- #
-
-
 @app.post("/api/v1/crawl", tags=["crawl"], status_code=202)
 def start_crawl(request: CrawlRequest) -> dict:
     """Walk a site, extracting from the pages or files that match the scope."""
@@ -560,11 +543,6 @@ def stop_crawl(crawl_id: str) -> dict:
     frontier.finish("stopped")
     log.info("api.crawl_stopped", crawl_id=crawl_id)
     return {"crawl_id": crawl_id, "status": "stopping"}
-
-
-# --------------------------------------------------------------------------- #
-# Task status
-# --------------------------------------------------------------------------- #
 
 
 @app.post("/api/v1/search", tags=["retrieve"])

@@ -113,11 +113,6 @@ def test_every_decision_explains_itself():
         assert route(question).reason
 
 
-# --------------------------------------------------------------------------- #
-# The API surface
-# --------------------------------------------------------------------------- #
-
-
 @pytest.fixture
 def client():
     return TestClient(api.app)

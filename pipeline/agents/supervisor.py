@@ -124,8 +124,6 @@ class Supervisor:
         self._on_progress = on_progress
         self._graph = self._build()
 
-    # ------------------------------------------------------------------ #
-
     def _build(self):
         graph = StateGraph(_State)
         graph.add_node("gather", self._gather)
@@ -141,10 +139,6 @@ class Supervisor:
         )
         graph.add_edge("acquire", "gather")
         return graph.compile()
-
-    # ------------------------------------------------------------------ #
-    # Nodes
-    # ------------------------------------------------------------------ #
 
     def _gather(self, state: _State) -> _State:
         return self._run_specialist(state, CORPUS, state.get("focus") or state["question"])
@@ -325,10 +319,6 @@ class Supervisor:
             question, local_only=self.local_only, extra_queries=extra_queries or None
         )
 
-    # ------------------------------------------------------------------ #
-    # Routing
-    # ------------------------------------------------------------------ #
-
     def _after_synthesis(self, state: _State) -> str:
         if state.get("sufficient"):
             self._stopped = "answered"
@@ -370,8 +360,6 @@ class Supervisor:
             network_calls=self.budget.network_calls,
             write_calls=self.budget.write_calls,
         )
-
-    # ------------------------------------------------------------------ #
 
     def investigate(self, question: str) -> Investigation:
         question = (question or "").strip()
@@ -429,7 +417,6 @@ class Supervisor:
         )
         metrics.incr("agents.supervisor.runs")
         return result
-
 
     def _report(self, event: dict[str, Any]) -> None:
         """Progress is best-effort. A broken reporter must not fail a run."""

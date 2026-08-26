@@ -32,12 +32,10 @@ log = get_logger("detect.magic")
 #: (offset, signature, kind, subtype). Longest match wins, so more specific
 #: signatures can share a prefix with more general ones.
 _SIGNATURES: tuple[tuple[int, bytes, ResourceKind, str], ...] = (
-    # --- documents ---
     (0, b"%PDF-", ResourceKind.DOCUMENT, "pdf"),
     (0, b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", ResourceKind.DOCUMENT, "ole2"),  # legacy doc/xls/ppt
     (0, b"{\\rtf", ResourceKind.DOCUMENT, "rtf"),
     (0, b"%!PS", ResourceKind.DOCUMENT, "postscript"),
-    # --- images ---
     (0, b"\x89PNG\r\n\x1a\n", ResourceKind.IMAGE, "png"),
     (0, b"\xff\xd8\xff", ResourceKind.IMAGE, "jpeg"),
     (0, b"GIF87a", ResourceKind.IMAGE, "gif"),
@@ -47,7 +45,6 @@ _SIGNATURES: tuple[tuple[int, bytes, ResourceKind, str], ...] = (
     (0, b"MM\x00*", ResourceKind.IMAGE, "tiff"),
     (0, b"\x00\x00\x01\x00", ResourceKind.IMAGE, "ico"),
     (0, b"<svg", ResourceKind.IMAGE, "svg"),
-    # --- audio ---
     (0, b"ID3", ResourceKind.AUDIO, "mp3"),
     (0, b"\xff\xfb", ResourceKind.AUDIO, "mp3"),
     (0, b"\xff\xf3", ResourceKind.AUDIO, "mp3"),
@@ -55,12 +52,10 @@ _SIGNATURES: tuple[tuple[int, bytes, ResourceKind, str], ...] = (
     (0, b"fLaC", ResourceKind.AUDIO, "flac"),
     (0, b"OggS", ResourceKind.AUDIO, "ogg"),
     (0, b"MThd", ResourceKind.AUDIO, "midi"),
-    # --- video ---
     (0, b"\x1a\x45\xdf\xa3", ResourceKind.VIDEO, "matroska"),  # mkv / webm
     (0, b"FLV\x01", ResourceKind.VIDEO, "flv"),
     (0, b"\x00\x00\x01\xba", ResourceKind.VIDEO, "mpeg-ps"),
     (0, b"\x00\x00\x01\xb3", ResourceKind.VIDEO, "mpeg-vs"),
-    # --- archives ---
     (0, b"PK\x03\x04", ResourceKind.ARCHIVE, "zip"),  # refined by _refine_zip
     (0, b"PK\x05\x06", ResourceKind.ARCHIVE, "zip-empty"),
     (0, b"\x1f\x8b", ResourceKind.ARCHIVE, "gzip"),

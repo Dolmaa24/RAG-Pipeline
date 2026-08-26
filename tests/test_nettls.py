@@ -30,11 +30,6 @@ def strict_by_default(monkeypatch):
     monkeypatch.setattr(config, "TLS_LEGACY_HOSTS", "")
 
 
-# --------------------------------------------------------------------------- #
-# Reading a host out of what the caller had
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize(
     "given, expected",
     [
@@ -47,11 +42,6 @@ def strict_by_default(monkeypatch):
 )
 def test_the_host_is_found_in_a_url_or_taken_as_one(given, expected):
     assert host_of(given) == expected
-
-
-# --------------------------------------------------------------------------- #
-# Who the allowance covers
-# --------------------------------------------------------------------------- #
 
 
 def test_a_listed_host_is_allowed(monkeypatch):
@@ -94,11 +84,6 @@ def test_the_global_flag_still_covers_everything(monkeypatch):
     assert legacy_allowed_for(None)
 
 
-# --------------------------------------------------------------------------- #
-# The contexts themselves
-# --------------------------------------------------------------------------- #
-
-
 def test_the_strict_context_does_not_carry_the_legacy_option():
     assert not client_context("https://example.com/").options & OP_LEGACY_SERVER_CONNECT
 
@@ -124,11 +109,6 @@ def test_two_hosts_on_the_same_footing_share_one_context(monkeypatch):
     """Building a context is not cheap, and the cache is keyed on the decision."""
     monkeypatch.setattr(config, "TLS_LEGACY_HOSTS", "iitm.ac.in,example.org")
     assert client_context("https://a.iitm.ac.in/") is client_context("https://example.org/")
-
-
-# --------------------------------------------------------------------------- #
-# The message a person has to act on
-# --------------------------------------------------------------------------- #
 
 
 def _renegotiation_error() -> Exception:

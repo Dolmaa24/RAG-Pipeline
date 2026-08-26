@@ -68,8 +68,6 @@ class EmailHandler(BaseHandler):
         )
         return item
 
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _body(message: EmailMessage) -> str:
         """Prefer text/plain; fall back to stripping the HTML alternative."""

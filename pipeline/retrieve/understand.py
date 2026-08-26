@@ -69,10 +69,6 @@ class QueryPlan(BaseModel):
         return out
 
 
-# --------------------------------------------------------------------------- #
-# The cheap path
-# --------------------------------------------------------------------------- #
-
 #: Signals that a question has more than one part, a comparison, or a time
 #: constraint — the three things rewriting actually helps with.
 _COMPLEX = re.compile(
@@ -99,10 +95,6 @@ def is_trivial(query: str) -> bool:
         return False
     return not _COMPLEX.search(text)
 
-
-# --------------------------------------------------------------------------- #
-# The model call
-# --------------------------------------------------------------------------- #
 
 _SCHEMA_HINT = {
     "sub_queries": "list of strings",

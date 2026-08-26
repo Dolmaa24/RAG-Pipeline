@@ -62,11 +62,6 @@ missing.\
 """
 
 
-# --------------------------------------------------------------------------- #
-# What a run produces
-# --------------------------------------------------------------------------- #
-
-
 @dataclass(slots=True)
 class LoopResult:
     """One finished run, with the reasoning that produced it."""
@@ -109,11 +104,6 @@ class LoopState(TypedDict, total=False):
     seen: set[str]
 
 
-# --------------------------------------------------------------------------- #
-# The graph
-# --------------------------------------------------------------------------- #
-
-
 class AgentLoop:
     """One configured loop.
 
@@ -150,8 +140,6 @@ class AgentLoop:
         """The catalog this run may use. Tools it may not are simply absent."""
         return describe_all(allowed=self.budget.effects())
 
-    # ------------------------------------------------------------------ #
-
     def _build(self):
         graph = StateGraph(LoopState)
         graph.add_node("act", self._act)
@@ -168,10 +156,6 @@ class AgentLoop:
         graph.add_edge("finish", END)
         # No checkpointer: Celery owns durability. See the module docstring.
         return graph.compile()
-
-    # ------------------------------------------------------------------ #
-    # Nodes
-    # ------------------------------------------------------------------ #
 
     def _act(self, state: LoopState) -> LoopState:
         turn = self._turn(state["messages"], self.tools())
@@ -246,10 +230,6 @@ class AgentLoop:
             "answer": turn.text or _NOTHING_TO_SAY,
         }
 
-    # ------------------------------------------------------------------ #
-    # Routing
-    # ------------------------------------------------------------------ #
-
     def _after_act(self, state: LoopState) -> str:
         stopped = state.get("stopped")
         if stopped == "answered":
@@ -276,10 +256,6 @@ class AgentLoop:
             self._stop_reason = reason
             return "finish"
         return "act"
-
-    # ------------------------------------------------------------------ #
-    # Doing the work
-    # ------------------------------------------------------------------ #
 
     def _turn(self, messages: list[Message], tools: list[dict]) -> ToolTurn:
         try:
@@ -327,10 +303,6 @@ class AgentLoop:
                 )
 
         return [invoke(request.name, request.arguments, allowed=allowed) for request in requests]
-
-    # ------------------------------------------------------------------ #
-    # Entry point
-    # ------------------------------------------------------------------ #
 
     def run(self, question: str) -> LoopResult:
         """Answer one question, spending no more than the budget allows."""

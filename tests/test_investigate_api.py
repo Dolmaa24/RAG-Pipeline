@@ -40,11 +40,6 @@ def queued(monkeypatch):
     return seen
 
 
-# --------------------------------------------------------------------------- #
-# Routing
-# --------------------------------------------------------------------------- #
-
-
 def test_investigations_have_their_own_queue():
     # Not io: a ninety-second run would sit in a thread sixteen fetches are
     # queued behind. Not cpu: it would block behind a transcription.
@@ -59,11 +54,6 @@ def test_the_task_does_not_retry():
     import tasks
 
     assert not getattr(tasks.investigate, "autoretry_for", ())
-
-
-# --------------------------------------------------------------------------- #
-# Permissions survive the trip
-# --------------------------------------------------------------------------- #
 
 
 def test_a_plain_request_grants_nothing(client, queued):
@@ -112,11 +102,6 @@ def test_a_broker_that_cannot_be_reached_is_a_503(client, monkeypatch):
 
     assert response.status_code == 503
     assert "broker" in response.json()["detail"]
-
-
-# --------------------------------------------------------------------------- #
-# The budget the task builds
-# --------------------------------------------------------------------------- #
 
 
 def _budget_for(monkeypatch, **permissions):
@@ -178,11 +163,6 @@ def test_the_task_wires_a_progress_reporter(monkeypatch):
     # A run takes half a minute or more. Without this the caller watches a
     # spinner and cannot tell a slow graph query from a hung model.
     assert _budget_for(monkeypatch)["on_progress"] is not None
-
-
-# --------------------------------------------------------------------------- #
-# Polling
-# --------------------------------------------------------------------------- #
 
 
 def _status(monkeypatch, *, state, info=None, successful=True, ready=True):

@@ -88,8 +88,6 @@ class ArchiveHandler(BaseHandler):
         log.info("archive.opened", url=item.url, format=subtype, members=len(listing))
         return item
 
-    # ------------------------------------------------------------------ #
-
     def _iter_members(self, data: bytes, subtype: str) -> Iterator[tuple[str, bytes]]:
         if subtype in ("zip", "zip-empty") or data[:2] == b"PK":
             yield from self._iter_zip(data)

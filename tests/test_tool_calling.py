@@ -51,11 +51,6 @@ TOOLS = [
 ]
 
 
-# --------------------------------------------------------------------------- #
-# The turn
-# --------------------------------------------------------------------------- #
-
-
 def test_a_turn_is_calls_or_text_never_both():
     calling = ToolTurn(calls=[ToolRequest("search_corpus", {"query": "x"})])
     answering = ToolTurn(text="here it is")
@@ -77,11 +72,6 @@ def test_an_observation_is_addressed_to_the_call_that_asked_for_it():
     assert message.role == "tool"
     assert message.tool_call_id == "call_7"
     assert message.tool_name == "search_corpus"
-
-
-# --------------------------------------------------------------------------- #
-# Wire formats
-# --------------------------------------------------------------------------- #
 
 
 def test_ollama_addresses_a_tool_result_by_name():
@@ -143,11 +133,6 @@ def test_a_tool_without_arguments_still_publishes_an_object_schema(as_tool):
     assert as_tool(TOOLS[1])["function"]["parameters"]["type"] == "object"
 
 
-# --------------------------------------------------------------------------- #
-# Arguments arrive in more than one shape
-# --------------------------------------------------------------------------- #
-
-
 def _ollama_args(raw):
     return _arguments_of({"function": {"arguments": raw}})
 
@@ -164,11 +149,6 @@ def test_unparseable_arguments_are_handed_on_not_raised(parse):
     # instead of letting validation explain the problem in terms it can act on.
     result = parse("{not json")
     assert "__unparseable__" in result
-
-
-# --------------------------------------------------------------------------- #
-# The shim
-# --------------------------------------------------------------------------- #
 
 
 def test_the_catalog_leads_with_what_a_tool_is_for():
@@ -253,11 +233,6 @@ def test_a_shimmed_turn_is_marked_not_native(monkeypatch):
     assert [c.name for c in turn.calls] == ["search_corpus"]
 
 
-# --------------------------------------------------------------------------- #
-# Choosing whether to shim
-# --------------------------------------------------------------------------- #
-
-
 class _Native:
     name = "native"
     model = "m"
@@ -312,11 +287,6 @@ def test_a_backend_missing_the_method_entirely_is_wrapped():
     assert isinstance(shim_if_needed(Ancient()), ShimmedBackend)
 
 
-# --------------------------------------------------------------------------- #
-# Routing
-# --------------------------------------------------------------------------- #
-
-
 def test_the_agent_role_can_point_somewhere_other_than_extraction(monkeypatch):
     from pipeline.extract import llm
 
@@ -362,11 +332,6 @@ def test_a_missing_agent_model_falls_back_rather_than_failing(monkeypatch):
     assert llm.get_agent_backend().model == "qwen2.5:3b"
 
 
-# --------------------------------------------------------------------------- #
-# Against a real model
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.slow
 def test_a_real_model_calls_a_tool_and_reads_the_result():
     from pipeline.extract.llm.ollama import OllamaBackend
@@ -397,11 +362,6 @@ def test_a_real_model_calls_a_tool_and_reads_the_result():
     # It may answer or search again; what must hold is that the history with a
     # tool result in it was accepted rather than rejected as malformed.
     assert second.calls or second.text
-
-
-# --------------------------------------------------------------------------- #
-# A model that claims tools and cannot use them
-# --------------------------------------------------------------------------- #
 
 
 class _ClaimsToolsButWritesProse:

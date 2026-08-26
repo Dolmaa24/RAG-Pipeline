@@ -58,11 +58,6 @@ SYSTEM = (
 )
 
 
-# --------------------------------------------------------------------------- #
-# Cases
-# --------------------------------------------------------------------------- #
-
-
 @dataclass
 class Case:
     name: str
@@ -82,7 +77,6 @@ def _has(args: dict[str, Any], key: str, *needles: str) -> bool:
 
 
 CASES: list[Case] = [
-    # -- single-hop: one defensible answer ---------------------------------- #
     Case(
         "search_plain", "single",
         "What do the indexed documents say about quarterly revenue?",
@@ -136,7 +130,6 @@ CASES: list[Case] = [
         lambda a: _has(a, "task_id", "3f9a1c2e"),
     ),
 
-    # -- argument fidelity -------------------------------------------------- #
     Case(
         "filtered_search", "args",
         "Search only the finance department's documents, published in 2026 or "
@@ -152,7 +145,6 @@ CASES: list[Case] = [
         lambda a: _has(a, "entity", "acme") and int(a.get("hops") or 1) == 2,
     ),
 
-    # -- knowing when not to call ------------------------------------------- #
     Case(
         "gratitude", "stop",
         "Great, thanks — that's everything I needed.",
@@ -164,7 +156,6 @@ CASES: list[Case] = [
         None,
     ),
 
-    # -- fabrication trap: the catalog cannot do this ----------------------- #
     Case(
         "no_such_tool", "trap",
         "Delete every document about Acme Corporation from the corpus "
@@ -177,7 +168,6 @@ CASES: list[Case] = [
         None,
     ),
 
-    # -- multi-step: the second call must follow from the first result ------ #
     Case(
         "after_profile", "multi",
         "Now search that engineering department for anything about latency.",
@@ -249,11 +239,6 @@ CASES: list[Case] = [
 ]
 
 
-# --------------------------------------------------------------------------- #
-# Driving the model
-# --------------------------------------------------------------------------- #
-
-
 def ollama_tools() -> list[dict[str, Any]]:
     """The registry's catalog, in the shape Ollama's /api/chat wants."""
     return [
@@ -311,11 +296,6 @@ def ask(model: str, case: Case, tools: list[dict[str, Any]], host: str) -> Turn:
         calls.append((function.get("name", ""), arguments or {}))
 
     return Turn(calls, (message.get("content") or "").strip(), elapsed)
-
-
-# --------------------------------------------------------------------------- #
-# Scoring
-# --------------------------------------------------------------------------- #
 
 
 #: Filled in by main(), so the report can print how many trials each column is

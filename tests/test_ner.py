@@ -96,11 +96,6 @@ def test_blank_span_text_is_skipped():
     assert ner.extract_entities(TEXT, model=_FakeGliner(spans)) == []
 
 
-# --------------------------------------------------------------------------- #
-# The extractor's use of it
-# --------------------------------------------------------------------------- #
-
-
 def test_the_model_is_only_asked_for_relationships(fake_backend, monkeypatch):
     """GLiNER supplies entities, so the model emits edges and nothing else."""
     from config import config

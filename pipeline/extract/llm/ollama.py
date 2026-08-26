@@ -48,8 +48,6 @@ class OllamaBackend:
         self.host = (host or config.OLLAMA_HOST).rstrip("/")
         self.timeout = config.AI_TIMEOUT
 
-    # ------------------------------------------------------------------ #
-
     def available(self) -> bool:
         try:
             response = httpx.get(f"{self.host}/api/tags", timeout=2.0)
@@ -139,14 +137,12 @@ class OllamaBackend:
 
         raise SchemaViolation("; ".join(problems[:5]))  # pragma: no cover - loop always returns
 
-    # ------------------------------------------------------------------ #
     # Tool calling
     #
     # A different endpoint, not a different option. /api/generate takes a
     # single prompt string and has nowhere to put a tool result, so there is no
     # way to continue a conversation on it. /api/chat takes a message list and
     # a tools array, which is the whole primitive.
-    # ------------------------------------------------------------------ #
 
     def supports_tools(self) -> bool:
         """Whether the pulled model advertises tool support.
@@ -227,8 +223,6 @@ class OllamaBackend:
             tokens=payload.get("eval_count"),
         )
         return turn
-
-    # ------------------------------------------------------------------ #
 
     def _call(self, full_prompt: str, json_schema: dict) -> dict:
         body = {

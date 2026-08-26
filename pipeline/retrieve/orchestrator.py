@@ -118,7 +118,6 @@ def retrieve(
     want_graph = config.GRAPH_ENABLED if use_graph is None else use_graph
     want_rerank = config.RETRIEVE_RERANK if rerank_results is None else rerank_results
 
-    # --- understand ----------------------------------------------------- #
     stage = time.perf_counter()
     if rewrite is False:
         # Asked not to rewrite: make no call at all. Calling and discarding the
@@ -147,7 +146,6 @@ def retrieve(
                 seen.add(key)
                 queries.append(extra.strip())
 
-    # --- retrieve, both legs at once ------------------------------------ #
     stage = time.perf_counter()
     retriever = retriever or HybridRetriever()
 
@@ -181,7 +179,6 @@ def retrieve(
 
     result.timings_ms["retrieve"] = round((time.perf_counter() - stage) * 1000, 2)
 
-    # --- rerank ---------------------------------------------------------- #
     if want_rerank and result.chunks:
         stage = time.perf_counter()
         from pipeline.retrieve.rerank import rerank as rerank_chunks

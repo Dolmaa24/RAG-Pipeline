@@ -37,11 +37,6 @@ CAREER = (
 )
 
 
-# --------------------------------------------------------------------------- #
-# The injection case
-# --------------------------------------------------------------------------- #
-
-
 def test_a_quote_in_an_entity_name_round_trips(graph: GraphStore):
     """The original built Cypher by interpolation; this is what that broke on."""
     graph.upsert([_entity("O'Brien & Co", type="Organization")], [])
@@ -54,11 +49,6 @@ def test_a_cypher_injection_attempt_is_stored_as_a_name(graph: GraphStore):
     names = [e["name"] for e in graph.entities()]
     assert hostile in names
     assert graph.count()["entities"] == 1
-
-
-# --------------------------------------------------------------------------- #
-# Idempotency
-# --------------------------------------------------------------------------- #
 
 
 def test_reingesting_the_same_document_adds_nothing(graph: GraphStore):
@@ -84,11 +74,6 @@ def test_an_edge_updates_in_place(graph: GraphStore):
     [triple] = graph.neighbours(["A"], hops=1)
     assert triple.description == "new"
     assert graph.count()["relationships"] == 1
-
-
-# --------------------------------------------------------------------------- #
-# Traversal
-# --------------------------------------------------------------------------- #
 
 
 def test_one_hop_returns_direct_edges(graph: GraphStore):
@@ -130,11 +115,6 @@ def test_the_hop_cap_holds(graph: GraphStore, monkeypatch):
 def test_no_seeds_returns_nothing(graph: GraphStore):
     graph.upsert(*CAREER)
     assert graph.neighbours([]) == []
-
-
-# --------------------------------------------------------------------------- #
-# The read-only guard
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
@@ -188,11 +168,6 @@ def test_the_agent_declines_without_seeds(fake_backend):
     backend = fake_backend({"cypher_query": "MATCH (a) RETURN a"})
     assert CypherAgent(backend=backend).generate("anything", []) is None
     assert backend.calls == 0
-
-
-# --------------------------------------------------------------------------- #
-# Extraction and resolution
-# --------------------------------------------------------------------------- #
 
 
 def test_extraction_attaches_provenance(fake_backend):
@@ -303,11 +278,6 @@ def test_remapping_drops_the_self_loop_a_merge_creates():
     assert edges == []
 
 
-# --------------------------------------------------------------------------- #
-# Suffix resolution — the dominant alias pattern, decided without a model
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize(
     "name,expected",
     [
@@ -381,11 +351,6 @@ def test_the_agent_rejects_the_unbound_form(fake_backend):
     assert CypherAgent(backend=backend).generate("q", ["seed"]) is None
 
 
-# --------------------------------------------------------------------------- #
-# The lock — Kuzu is single-writer and the lock is process-wide
-# --------------------------------------------------------------------------- #
-
-
 def test_a_read_only_store_refuses_to_write(tmp_path: Path):
     path = str(tmp_path / "kuzu")
     with GraphStore(db_path=path) as writer:
@@ -441,11 +406,6 @@ def test_the_builder_releases_the_store_it_opened(tmp_path: Path, fake_backend, 
     # If the lock were still held, opening read-write here would raise.
     with GraphStore(db_path=str(tmp_path / "kuzu")) as store:
         assert store.count()["entities"] == 1
-
-
-# --------------------------------------------------------------------------- #
-# Windowing — the whole document reaches the graph, not just its front
-# --------------------------------------------------------------------------- #
 
 
 def test_a_long_document_is_windowed_not_truncated(fake_backend, monkeypatch):
@@ -504,10 +464,6 @@ def test_a_short_document_is_still_one_call(fake_backend, monkeypatch):
     GraphExtractor(backend=backend, cache=GraphCache()).extract("a short sentence")
     assert backend.calls == 1
 
-
-# --------------------------------------------------------------------------- #
-# Reconstructing a variable-length path
-# --------------------------------------------------------------------------- #
 
 #: Two hops in a straight line, so that "the middle node" and "the endpoints"
 #: are different answers and a shifted expansion cannot pass by luck.
@@ -616,11 +572,6 @@ def test_a_path_shape_that_matches_neither_convention_is_dropped(graph: GraphSto
     nonsense = {"_nodes": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
                 "_rels": [{"relation": "X"}, {"relation": "Y"}, {"relation": "Z"}]}
     assert _path_triples(nonsense, start="A", end="C") == []
-
-
-# --------------------------------------------------------------------------- #
-# Clearing the graph
-# --------------------------------------------------------------------------- #
 
 
 def test_a_read_only_graph_refuses_to_be_cleared(tmp_path):

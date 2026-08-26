@@ -203,10 +203,6 @@ def _unescape(value: str) -> str:
     return html_module.unescape(value).strip()
 
 
-# --------------------------------------------------------------------------- #
-# Mapping harvested structure onto the caller's schema
-# --------------------------------------------------------------------------- #
-
 #: Field name → the keys that commonly hold that value in schema.org, OpenGraph
 #: and framework state. Ordered: earlier entries are preferred.
 FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
@@ -318,7 +314,6 @@ def _flatten_candidates(structured: dict[str, Any]) -> dict[str, Any]:
         flat.setdefault(key, value)
         bare = key.split(":", 1)[-1]
         flat.setdefault(bare, value)
-
 
     # Rows are structure too. A CSV whose columns are named `title` and `price`
     # is the most literal tier-1 hit there is, and a two-column HTML or PDF

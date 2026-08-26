@@ -135,15 +135,12 @@ class ExtractionItem(BaseModel):
     redirect_chain: List[str] = Field(default_factory=list)
     fetch_mode: FetchMode = FetchMode.STATIC
 
-    # --- Stage 1: FETCH ---
     raw_bytes: Optional[bytes] = None
     content_type: Optional[str] = None
 
-    # --- Stage 2: ROUTE ---
     kind: ResourceKind = ResourceKind.UNKNOWN
     handler: Optional[str] = None
 
-    # --- Stage 3: DECODE / PARSE ---
     decoded_text: Optional[str] = None
     parsed_tree: Optional[Dict[str, Any]] = None
     cleaned_text: Optional[str] = None
@@ -151,17 +148,14 @@ class ExtractionItem(BaseModel):
     #: OpenGraph, __NEXT_DATA__, tables). Tier 1 of the cascade reads this.
     structured: Optional[Dict[str, Any]] = None
 
-    # --- Stage 4: EXTRACT ---
     extracted_data: Optional[Dict[str, Any]] = None
     method: ExtractionMethod = ExtractionMethod.NONE
     tier: Optional[int] = None
     confidence: float = 0.0
 
-    # --- Stage 5: NORMALIZE / VALIDATE ---
     normalized_data: Optional[Dict[str, Any]] = None
     validation_failures: List[str] = Field(default_factory=list)
 
-    # --- Metadata and lineage ---
     metadata: Dict[str, Any] = Field(default_factory=dict)
     #: Items discovered inside this one: archive members, feed entries,
     #: email attachments, sitemap URLs. Recursion is bounded by `depth`.
@@ -174,15 +168,10 @@ class ExtractionItem(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     job_id: Optional[str] = None
 
-    # --- Failure tracking ---
     error: Optional[str] = None
     error_type: Optional[str] = None
     failed_at_stage: Optional[Stage] = None
     transient: bool = False
-
-    # ------------------------------------------------------------------ #
-    # Failure handling
-    # ------------------------------------------------------------------ #
 
     def fail(
         self,
@@ -225,10 +214,6 @@ class ExtractionItem(BaseModel):
     def warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
-
-    # ------------------------------------------------------------------ #
-    # Derived values
-    # ------------------------------------------------------------------ #
 
     @property
     def text_for_extraction(self) -> str:

@@ -15,11 +15,6 @@ from pipeline.retrieve.understand import (
 )
 
 
-# --------------------------------------------------------------------------- #
-# The gate — the call that is not made
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize(
     "query",
     [
@@ -73,11 +68,6 @@ def test_rewriting_can_be_disabled_globally(fake_backend, monkeypatch):
     plan = understand("how did revenue and headcount change after the merger")
     assert plan.trivial is True
     assert backend.calls == 0
-
-
-# --------------------------------------------------------------------------- #
-# The fused call
-# --------------------------------------------------------------------------- #
 
 
 def _plan_backend(fake_backend):
@@ -153,11 +143,6 @@ def test_a_dead_model_degrades_to_no_rewriting(fake_backend, monkeypatch):
     assert plan.queries() == ["how did revenue and headcount change after the merger"]
 
 
-# --------------------------------------------------------------------------- #
-# The cache and caller-supplied filters
-# --------------------------------------------------------------------------- #
-
-
 def test_the_same_question_is_not_planned_twice(fake_backend, monkeypatch):
     backend = _plan_backend(fake_backend)
     monkeypatch.setattr("pipeline.extract.llm.get_backend", lambda **_: backend)
@@ -208,11 +193,6 @@ def test_an_empty_query_is_handled():
     plan = understand("   ")
     assert plan.trivial is True
     assert plan.queries() == []
-
-
-# --------------------------------------------------------------------------- #
-# Inferred filters that the corpus cannot satisfy
-# --------------------------------------------------------------------------- #
 
 
 def test_an_inferred_value_the_corpus_lacks_is_dropped(monkeypatch):

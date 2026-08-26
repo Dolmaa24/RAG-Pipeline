@@ -19,11 +19,6 @@ def _rel(source: str, target: str, relation: str) -> Relationship:
     return Relationship(source=source, target=target, relation=relation, description="")
 
 
-# --------------------------------------------------------------------------- #
-# Type bucketing
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize(
     "raw,expected",
     [
@@ -37,11 +32,6 @@ def _rel(source: str, target: str, relation: str) -> Relationship:
 )
 def test_types_bucket(raw, expected):
     assert bucket(raw) == expected
-
-
-# --------------------------------------------------------------------------- #
-# The two real reversals
-# --------------------------------------------------------------------------- #
 
 
 def test_a_type_impossible_edge_is_flipped():
@@ -63,11 +53,6 @@ def test_word_order_catches_what_types_cannot():
     )
     assert (fixed[0].source, fixed[0].target) == ("Northwind Traders", "Fabrikam Ltd")
     assert corrections[0].evidence == "word order in the source text"
-
-
-# --------------------------------------------------------------------------- #
-# Not making things worse
-# --------------------------------------------------------------------------- #
 
 
 def test_passive_voice_is_not_mistaken_for_a_reversal():
@@ -129,11 +114,6 @@ def test_word_order_needs_both_names_present():
 
 def test_no_text_means_no_order_evidence():
     assert check_order(_rel("A", "B", "ACQUIRED"), "") is Verdict.UNKNOWN
-
-
-# --------------------------------------------------------------------------- #
-# Wiring
-# --------------------------------------------------------------------------- #
 
 
 def test_a_rule_is_found_by_substring():

@@ -67,10 +67,6 @@ class CircuitBreaker:
         self._permanent: dict[str, str] = {}
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------ #
-    # Gate
-    # ------------------------------------------------------------------ #
-
     def check(self, url: str) -> None:
         """Raise :class:`~errors.CircuitOpen` if this host is cut off."""
         if not self.enabled:
@@ -101,10 +97,6 @@ class CircuitBreaker:
         except CircuitOpen:
             return False
         return True
-
-    # ------------------------------------------------------------------ #
-    # Feedback
-    # ------------------------------------------------------------------ #
 
     def record_success(self, url: str) -> None:
         if not self.enabled:
@@ -159,10 +151,6 @@ class CircuitBreaker:
             cooldown=self.cooldown_seconds,
             trips=circuit.total_trips,
         )
-
-    # ------------------------------------------------------------------ #
-    # Introspection
-    # ------------------------------------------------------------------ #
 
     def state_of(self, url: str) -> BreakerState:
         host = registrable_host(url) or url

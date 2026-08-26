@@ -45,11 +45,6 @@ def fake_transformer(monkeypatch):
     return _Model
 
 
-# --------------------------------------------------------------------------- #
-# The resident model
-# --------------------------------------------------------------------------- #
-
-
 def test_the_model_is_built_once_per_process(fake_transformer):
     """The first version rebuilt a 130 MB model for every document."""
     first = dense.get_dense_embedder("local_bge")
@@ -79,11 +74,6 @@ def test_an_unknown_provider_is_rejected():
         dense.get_dense_embedder("telepathy")
 
 
-# --------------------------------------------------------------------------- #
-# Device selection
-# --------------------------------------------------------------------------- #
-
-
 def test_auto_means_cpu():
     """Metal killed both the prefork worker and the uvicorn process."""
     from config import config
@@ -105,11 +95,6 @@ def test_the_chosen_device_reaches_the_model(fake_transformer, monkeypatch):
     monkeypatch.setattr(config, "INDEX_EMBED_DEVICE", "cpu")
     dense.get_dense_embedder("local_bge")
     assert fake_transformer.builds[0][1] == "cpu"
-
-
-# --------------------------------------------------------------------------- #
-# The orchestrator
-# --------------------------------------------------------------------------- #
 
 
 def test_every_chunk_gets_a_vector_and_its_model(monkeypatch, fake_embedder):

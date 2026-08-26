@@ -154,8 +154,6 @@ class CrawlScope:
         object.__setattr__(self, "_include", [re.compile(p, re.I) for p in self.include_patterns])
         object.__setattr__(self, "_exclude", [re.compile(p, re.I) for p in self.exclude_patterns])
 
-    # ------------------------------------------------------------------ #
-
     @property
     def host(self) -> str:
         return registrable_host(self.start_url)
@@ -180,8 +178,6 @@ class CrawlScope:
     @property
     def collects_everything(self) -> bool:
         return not self.collect_extensions and not self.collect_kinds
-
-    # ------------------------------------------------------------------ #
 
     def classify(self, url: str, *, depth: int, nofollow: bool = False) -> LinkDecision:
         """Decide what to do with one discovered link, before fetching it."""
@@ -268,8 +264,6 @@ class CrawlScope:
             return True  # collect everything in scope
         return kind in kinds
 
-    # ------------------------------------------------------------------ #
-
     def is_trap(self, url: str) -> Optional[str]:
         """Name the trap shape, or None. Cheap checks first."""
         parts = urlsplit(url)
@@ -298,8 +292,6 @@ class CrawlScope:
         if len(url) > 2000:
             return "URL is implausibly long"
         return None
-
-    # ------------------------------------------------------------------ #
 
     def normalize(self, base_url: str, href: str) -> str:
         """Absolute, canonical form of a link seen on ``base_url``."""

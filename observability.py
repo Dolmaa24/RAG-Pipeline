@@ -125,11 +125,6 @@ def current_job_id() -> Optional[str]:
     return _job_id.get()
 
 
-# --------------------------------------------------------------------------- #
-# Metrics
-# --------------------------------------------------------------------------- #
-
-
 class Metrics:
     """Thread-safe counters and timers, scoped to one process.
 

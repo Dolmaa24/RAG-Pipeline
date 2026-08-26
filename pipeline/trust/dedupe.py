@@ -126,8 +126,6 @@ class Deduplicator:
     _by_band: dict[int, list[tuple[int, str]]] = field(default_factory=dict, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
-    # ------------------------------------------------------------------ #
-
     def check(self, text: str, content_hash: str, url: str) -> DuplicateVerdict:
         """Is this document one we already have?"""
         if not config.DEDUPE_ENABLED:
@@ -171,8 +169,6 @@ class Deduplicator:
             self._db_add(fingerprint, content_hash, url)
         return fingerprint
 
-    # ------------------------------------------------------------------ #
-
     def _nearest(self, fingerprint: int, url: str) -> Optional[tuple[int, str]]:
         candidates: dict[str, int] = {}
 
@@ -198,10 +194,6 @@ class Deduplicator:
         best_url = min(candidates, key=lambda key: candidates[key])
         best_distance = candidates[best_url]
         return (best_distance, best_url) if best_distance <= self.max_distance else None
-
-    # ------------------------------------------------------------------ #
-    # Mongo-backed index
-    # ------------------------------------------------------------------ #
 
     def _db_exact(self, content_hash: str, url: str) -> Optional[str]:
         try:

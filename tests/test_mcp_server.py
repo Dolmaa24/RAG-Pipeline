@@ -25,11 +25,6 @@ from pipeline.agents.tools import Effect, catalog
 ALL_EFFECTS = [Effect.READ, Effect.NETWORK, Effect.WRITE]
 
 
-# --------------------------------------------------------------------------- #
-# What is exposed
-# --------------------------------------------------------------------------- #
-
-
 def test_read_only_by_default(monkeypatch):
     monkeypatch.setattr(mcp_server.config, "MCP_ALLOW_NETWORK", False)
     monkeypatch.setattr(mcp_server.config, "MCP_ALLOW_WRITE", False)
@@ -61,11 +56,6 @@ async def test_every_registry_tool_reaches_mcp():
     server = mcp_server.build_server(ALL_EFFECTS)
     exposed = {tool.name for tool in await server.list_tools()}
     assert exposed == {spec.name for spec in catalog(ALL_EFFECTS)}
-
-
-# --------------------------------------------------------------------------- #
-# Schema shape
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.anyio
@@ -101,11 +91,6 @@ async def test_tool_descriptions_come_from_the_registry():
 
     for tool in await server.list_tools():
         assert tool.description == get(tool.name).description
-
-
-# --------------------------------------------------------------------------- #
-# Calling
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.anyio

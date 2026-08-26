@@ -366,10 +366,6 @@ with right:
                 time.sleep(POLL_INTERVAL)
 
 
-# --------------------------------------------------------------------------- #
-# Search — the other half of the pipeline
-# --------------------------------------------------------------------------- #
-
 with search_tab:
     st.subheader("Ask the corpus")
     st.caption(
@@ -581,10 +577,6 @@ with search_tab:
                 st.json({"timings_ms": timings, "plan": plan})
                 st.json(result)
 
-
-# --------------------------------------------------------------------------- #
-# Investigate
-# --------------------------------------------------------------------------- #
 
 with investigate_tab:
     st.subheader("Investigate")

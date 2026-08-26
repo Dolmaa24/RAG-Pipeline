@@ -160,11 +160,6 @@ def _enqueue_index(
     return task.id
 
 
-# --------------------------------------------------------------------------- #
-# The general task: anything with a URL
-# --------------------------------------------------------------------------- #
-
-
 @celery_app.task(bind=True, name="tasks.extract_url", **RETRY_KWARGS)
 def extract_url(
     self,
@@ -250,11 +245,6 @@ def extract_url(
             gc.collect()
 
 
-# --------------------------------------------------------------------------- #
-# Media: routed to the cpu queue so it cannot block page fetches
-# --------------------------------------------------------------------------- #
-
-
 @celery_app.task(bind=True, name="tasks.extract_media", **RETRY_KWARGS)
 def extract_media(self, url: str, prompt: str, schema: dict, *, local_only: bool = False) -> dict:
     """Download and transcribe audio or video, then extract from the transcript."""
@@ -312,11 +302,6 @@ def capture_livestream(self, url: str, prompt: str, schema: dict) -> dict:
             gc.collect()
 
 
-# --------------------------------------------------------------------------- #
-# Batch
-# --------------------------------------------------------------------------- #
-
-
 @celery_app.task(bind=True, name="tasks.extract_batch")
 def extract_batch(self, urls: list[str], prompt: str, schema: dict, **options: Any) -> dict:
     """Run many URLs in one task, returning a single :class:`RunReport`.
@@ -332,11 +317,6 @@ def extract_batch(self, urls: list[str], prompt: str, schema: dict, **options: A
         report.metrics = metrics.snapshot()
         db.save_run(report)
         return report.to_dict()
-
-
-# --------------------------------------------------------------------------- #
-# Crawling
-# --------------------------------------------------------------------------- #
 
 
 @celery_app.task(bind=True, name="tasks.crawl_site")
@@ -565,11 +545,6 @@ def discover_sitemap(self, url: str) -> dict:
         }
 
 
-# --------------------------------------------------------------------------- #
-# Indexing: routed to the cpu queue, because embedding is a forward pass
-# --------------------------------------------------------------------------- #
-
-
 @celery_app.task(bind=True, name="tasks.index_document", **RETRY_KWARGS)
 def index_document(
     self,
@@ -676,16 +651,6 @@ def _build_graph(
     except Exception as exc:
         log.warning("task.graph_failed", source=source[:80], error=repr(exc))
         return {"error": repr(exc)}
-
-
-# --------------------------------------------------------------------------- #
-# Backwards-compatible names
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# Investigations: the agent loop, on its own queue
-# --------------------------------------------------------------------------- #
 
 
 @celery_app.task(bind=True, name="tasks.investigate")

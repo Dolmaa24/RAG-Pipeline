@@ -79,10 +79,6 @@ class GraphStore:
         if not read_only:
             self._init_schema()
 
-    # ------------------------------------------------------------------ #
-    # Lifetime — the lock is the reason this matters
-    # ------------------------------------------------------------------ #
-
     def __enter__(self) -> "GraphStore":
         return self
 
@@ -95,10 +91,6 @@ class GraphStore:
         self._read_db = None
         self._conn = None
         self._db = None
-
-    # ------------------------------------------------------------------ #
-    # Schema
-    # ------------------------------------------------------------------ #
 
     def _init_schema(self) -> None:
         self._conn.execute(
@@ -128,10 +120,6 @@ class GraphStore:
             )
             """
         )
-
-    # ------------------------------------------------------------------ #
-    # Writing
-    # ------------------------------------------------------------------ #
 
     def upsert(self, entities: list[Entity], relationships: list[Relationship]) -> dict[str, int]:
         """Add or update nodes and edges. Idempotent for the same input."""
@@ -199,10 +187,6 @@ class GraphStore:
 
         log.info("graph.upsert", **written)
         return written
-
-    # ------------------------------------------------------------------ #
-    # Reading
-    # ------------------------------------------------------------------ #
 
     @property
     def read_connection(self):

@@ -114,10 +114,6 @@ class RobotsGate:
         self._locks: dict[str, threading.Lock] = {}
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
-
     def verdict(self, url: str) -> RobotsVerdict:
         if not config.RESPECT_ROBOTS:
             return RobotsVerdict(True, "robots checking disabled by configuration")
@@ -155,10 +151,6 @@ class RobotsGate:
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
-
-    # ------------------------------------------------------------------ #
-    # Internals
-    # ------------------------------------------------------------------ #
 
     def _entry_for(self, url: str) -> _Entry:
         origin = origin_of(url)

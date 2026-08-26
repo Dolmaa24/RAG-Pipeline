@@ -60,11 +60,6 @@ class ImageHandler(BaseHandler):
         return item
 
 
-# --------------------------------------------------------------------------- #
-# Engines
-# --------------------------------------------------------------------------- #
-
-
 @lru_cache(maxsize=1)
 def _vision_available() -> bool:
     if os.uname().sysname != "Darwin":

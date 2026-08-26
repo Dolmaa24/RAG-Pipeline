@@ -53,8 +53,6 @@ class FetchPolicy:
     def __init__(self, gate: Optional[RobotsGate] = None) -> None:
         self.gate = gate or robots_gate
 
-    # ------------------------------------------------------------------ #
-
     def check(self, url: str, *, hop: int = 0) -> PolicyVerdict:
         """Full verdict for one URL. Raises nothing; see :meth:`enforce`."""
         parts = urlsplit(url)
@@ -111,8 +109,6 @@ class FetchPolicy:
         if "robots" in verdict.reason or "Disallow" in verdict.reason or "Crawl-delay" in verdict.reason:
             raise RobotsDisallowed(url, verdict.reason)
         raise HostNotAllowed(host_of(url) or url, verdict.reason)
-
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _resolves_private(host: str) -> tuple[bool, str]:

@@ -95,10 +95,6 @@ class LanceStore:
         self._table = None
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------ #
-    # Table lifecycle
-    # ------------------------------------------------------------------ #
-
     @property
     def table(self):
         """The table, or None when nothing has been written yet."""
@@ -148,10 +144,6 @@ class LanceStore:
                 got=dimension,
             )
 
-    # ------------------------------------------------------------------ #
-    # Writing
-    # ------------------------------------------------------------------ #
-
     def upsert_document(self, chunked_doc: ChunkedDocument, batch_size: int = 256) -> int:
         """Write every chunk, replacing any row with the same id."""
         chunks = chunked_doc.chunks
@@ -183,10 +175,6 @@ class LanceStore:
 
         self.ensure_indexes()
         return written
-
-    # ------------------------------------------------------------------ #
-    # Indexes
-    # ------------------------------------------------------------------ #
 
     def ensure_indexes(self, *, force_ann: bool = False) -> dict[str, Any]:
         """Build whatever indexes the current row count justifies.
@@ -246,10 +234,6 @@ class LanceStore:
             )
 
         return {"built": built, "rows": rows}
-
-    # ------------------------------------------------------------------ #
-    # Reading
-    # ------------------------------------------------------------------ #
 
     def search_dense(
         self,

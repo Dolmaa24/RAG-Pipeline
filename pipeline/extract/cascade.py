@@ -63,8 +63,6 @@ class ExtractionCascade:
         self.specs = specs if specs is not None else SpecStore(database)
         self._backend = backend
 
-    # ------------------------------------------------------------------ #
-
     def extract(
         self,
         item: ExtractionItem,
@@ -107,7 +105,6 @@ class ExtractionCascade:
         item.metadata["schema_hash"] = schema_hash
         item.metadata["prompt_hash"] = prompt_hash
 
-        # --- tier 0: unchanged content ---------------------------------- #
         key = cache_key(content_hash, schema_hash, prompt_hash) if content_hash else ""
         if key and 0 in allowed and config.ENABLE_TIER0_CACHE:
             cached = self.cache.get(key)
@@ -119,7 +116,6 @@ class ExtractionCascade:
                     note=f"served from cache (originally {cached.get('method')})",
                 )
 
-        # --- tier 1: the publisher's own structured data ----------------- #
         if 1 in allowed and config.ENABLE_TIER1_STRUCTURED and item.structured:
             data, fill = self._tier1(item, schema_hint, base_url)
             if fill >= config.MIN_FILL_RATE:
@@ -131,7 +127,6 @@ class ExtractionCascade:
                 log.debug("cascade.tier1_thin", url=item.url, fill_rate=round(fill, 2))
                 item.metadata["tier1_fill_rate"] = round(fill, 2)
 
-        # --- tier 2: a learned selector spec ----------------------------- #
         if (
             2 in allowed
             and config.ENABLE_TIER2_SELECTORS
@@ -149,7 +144,6 @@ class ExtractionCascade:
                     note="selector spec authored on this visit" if learned else None,
                 )
 
-        # --- tier 3: the model ------------------------------------------- #
         if 3 not in allowed or not config.ENABLE_TIER3_LLM:
             return item.fail(
                 Stage.EXTRACT,
@@ -157,10 +151,6 @@ class ExtractionCascade:
             )
 
         return self._tier3(item, prompt, schema_hint, json_schema, key, schema_hash, local_only)
-
-    # ------------------------------------------------------------------ #
-    # Tiers
-    # ------------------------------------------------------------------ #
 
     #: Keys the pipeline writes onto ``metadata`` for its own bookkeeping. They
     #: must never be offered to the schema mapper as if they were page content.
@@ -325,10 +315,6 @@ class ExtractionCascade:
         metrics.incr("extract.tier3_llm")
         self._store(key, response.data, ExtractionMethod.LLM, 3, fill, item, schema_hash)
         return self._accept(item, response.data, ExtractionMethod.LLM, 3, confidence=fill)
-
-    # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
 
     def _get_backend(self, local_only: bool, role: Optional[str] = None):
         """The backend for one tier's call.

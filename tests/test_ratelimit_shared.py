@@ -32,11 +32,6 @@ def state():
     backend.clear(HOST)
 
 
-# --------------------------------------------------------------------------- #
-# The bucket
-# --------------------------------------------------------------------------- #
-
-
 def test_a_full_bucket_admits_the_first_request_immediately(state):
     assert state.take(HOST, rate=10.0, capacity=1.0) == 0.0
 
@@ -70,11 +65,6 @@ def test_a_second_connection_sees_the_same_bucket(state):
     other = shared.connect()
     state.take(HOST, rate=2.0, capacity=1.0)
     assert other.take(HOST, rate=2.0, capacity=1.0) > 0.0
-
-
-# --------------------------------------------------------------------------- #
-# Concurrency leases
-# --------------------------------------------------------------------------- #
 
 
 def test_the_cap_is_enforced(state):
@@ -119,11 +109,6 @@ def test_an_expired_lease_is_swept(state, monkeypatch):
     assert backend.try_acquire(HOST, 1) is not None  # swept
 
 
-# --------------------------------------------------------------------------- #
-# Penalties
-# --------------------------------------------------------------------------- #
-
-
 def test_a_penalty_is_visible_to_every_worker(state):
     """Retry-After arrives on one response, in one process, and binds all."""
     other = shared.connect()
@@ -139,11 +124,6 @@ def test_a_longer_penalty_extends_and_a_shorter_one_does_not_shorten(state):
     state.penalize(HOST, 10.0)
     state.penalize(HOST, 2.0)
     assert state.penalty_remaining(HOST) > 9.0
-
-
-# --------------------------------------------------------------------------- #
-# Degrading rather than refusing
-# --------------------------------------------------------------------------- #
 
 
 def test_the_limiter_runs_without_redis(monkeypatch):

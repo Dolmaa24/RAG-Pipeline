@@ -83,11 +83,6 @@ def _varying_calls(count: int) -> list[ToolTurn]:
     return [_call("graph_neighbors", entity=f"Entity{n}") for n in range(count)]
 
 
-# --------------------------------------------------------------------------- #
-# The happy path
-# --------------------------------------------------------------------------- #
-
-
 def test_a_run_calls_a_tool_then_answers():
     backend = Scripted(_call("corpus_profile"), _answer("42 chunks."))
     result = AgentLoop(backend=backend).run("what is in the corpus?")
@@ -114,11 +109,6 @@ def test_the_tool_result_is_fed_back_to_the_model():
     # system + user, then system + user + assistant + tool.
     assert backend.calls[0]["messages"] == 2
     assert backend.calls[1]["messages"] == 4
-
-
-# --------------------------------------------------------------------------- #
-# What stops a run
-# --------------------------------------------------------------------------- #
 
 
 def test_a_model_that_never_stops_is_stopped_by_the_turn_limit(varying_tool):
@@ -211,11 +201,6 @@ def test_a_failed_model_call_is_reported_as_a_failure_not_an_answer():
     assert any("connection refused" in w for w in result.warnings)
 
 
-# --------------------------------------------------------------------------- #
-# Effects
-# --------------------------------------------------------------------------- #
-
-
 def test_a_read_only_run_is_not_shown_the_tools_it_cannot_use():
     offered = {tool["name"] for tool in AgentLoop(backend=Scripted()).tools()}
 
@@ -239,11 +224,6 @@ def test_a_call_beyond_its_effect_budget_is_refused_with_the_real_reason():
     reason = would_exceed_effect_budget(spend, Budget(network_calls=1), Effect.NETWORK)
 
     assert "no network calls left" in reason
-
-
-# --------------------------------------------------------------------------- #
-# Parallel dispatch
-# --------------------------------------------------------------------------- #
 
 
 def test_several_read_only_calls_in_one_turn_run_at_once():
@@ -276,11 +256,6 @@ def test_several_read_only_calls_in_one_turn_run_at_once():
         object.__setattr__(spec, "handler", original)
 
     assert len(seen) == 2
-
-
-# --------------------------------------------------------------------------- #
-# The trace
-# --------------------------------------------------------------------------- #
 
 
 def test_the_trace_records_every_step_with_what_it_cost():

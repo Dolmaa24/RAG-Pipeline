@@ -33,11 +33,6 @@ def store(tmp_path, monkeypatch):
     return tmp_path
 
 
-# --------------------------------------------------------------------------- #
-# Naming
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize(
     "given,expected",
     [
@@ -78,11 +73,6 @@ def test_the_original_name_survives_in_the_reference(store):
     assert save_upload(io.BytesIO(b"x"), "Quarterly Report.pdf").endswith(
         "-quarterly-report.pdf"
     )
-
-
-# --------------------------------------------------------------------------- #
-# Parsing
-# --------------------------------------------------------------------------- #
 
 
 def test_is_upload_url():
@@ -139,11 +129,6 @@ def test_resolve_returns_a_path_inside_the_upload_directory(store):
     assert path.read_bytes() == b"payload"
 
 
-# --------------------------------------------------------------------------- #
-# Size
-# --------------------------------------------------------------------------- #
-
-
 def test_an_oversized_upload_is_rejected_and_leaves_nothing_behind(store, monkeypatch):
     monkeypatch.setattr(uploads.config, "MAX_CONTENT_BYTES", 16)
 
@@ -157,11 +142,6 @@ def test_a_file_at_the_limit_is_kept(store, monkeypatch):
     monkeypatch.setattr(uploads.config, "MAX_CONTENT_BYTES", 16)
     url = save_upload(io.BytesIO(b"x" * 16), "small.pdf")
     assert resolve_upload(url).stat().st_size == 16
-
-
-# --------------------------------------------------------------------------- #
-# The fetch stage
-# --------------------------------------------------------------------------- #
 
 
 def test_fetch_reads_an_upload_from_disk(store):
@@ -213,11 +193,6 @@ def test_an_upload_over_the_size_limit_is_refused_at_fetch(store, monkeypatch):
     item = ResilientFetcher().fetch(ExtractionItem(url=url, job_id="t"))
     assert not item.ok
     assert "limit" in item.error
-
-
-# --------------------------------------------------------------------------- #
-# Routing
-# --------------------------------------------------------------------------- #
 
 
 def test_an_upload_is_never_routed_to_the_media_downloader():

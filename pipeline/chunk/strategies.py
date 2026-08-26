@@ -63,11 +63,6 @@ def _metadata(doc: PreprocessedDocument, strategy: str, *, section: str = "") ->
     )
 
 
-# --------------------------------------------------------------------------- #
-# 1. Fixed — overlapping windows
-# --------------------------------------------------------------------------- #
-
-
 def fixed_chunk(
     doc: PreprocessedDocument,
     chunk_size: Optional[int] = None,
@@ -85,11 +80,6 @@ def fixed_chunk(
         Chunk(document=text, metadata=_metadata(doc, "fixed"))
         for text in splitter.split_text(doc.clean_text)
     ]
-
-
-# --------------------------------------------------------------------------- #
-# 2. Semantic — split where the meaning turns
-# --------------------------------------------------------------------------- #
 
 
 class _EmbeddingsAdapter:
@@ -126,11 +116,6 @@ def semantic_chunk(doc: PreprocessedDocument) -> List[Chunk]:
     ]
 
 
-# --------------------------------------------------------------------------- #
-# 3. Hierarchical — follow the document's own headings
-# --------------------------------------------------------------------------- #
-
-
 def hierarchical_chunk(doc: PreprocessedDocument) -> List[Chunk]:
     """Split on markdown headers, keeping the heading path as the section name."""
     from langchain_text_splitters import MarkdownHeaderTextSplitter
@@ -154,10 +139,6 @@ def hierarchical_chunk(doc: PreprocessedDocument) -> List[Chunk]:
         )
     return chunks
 
-
-# --------------------------------------------------------------------------- #
-# 4. Model-assisted — for text too broken to split mechanically
-# --------------------------------------------------------------------------- #
 
 _LLM_SCHEMA = {"chunks": "list of strings"}
 

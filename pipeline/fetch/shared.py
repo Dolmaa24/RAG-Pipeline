@@ -116,8 +116,6 @@ class SharedLimiterState:
         self._take = client.register_script(_TAKE)
         self._acquire = client.register_script(_ACQUIRE)
 
-    # -- keys ---------------------------------------------------------- #
-
     @staticmethod
     def _bucket_key(host: str) -> str:
         return f"ratelimit:bucket:{host}"
@@ -130,8 +128,6 @@ class SharedLimiterState:
     def _penalty_key(host: str) -> str:
         return f"ratelimit:penalty:{host}"
 
-    # -- the bucket ---------------------------------------------------- #
-
     def take(self, host: str, *, rate: float, capacity: float, amount: float = 1.0) -> float:
         """Seconds to wait before this request may go out. 0 means now."""
         raw = self._take(
@@ -139,8 +135,6 @@ class SharedLimiterState:
             args=[rate, capacity, amount, _BUCKET_TTL_MS],
         )
         return float(raw)
-
-    # -- concurrency --------------------------------------------------- #
 
     def try_acquire(self, host: str, limit: int) -> Optional[str]:
         """A lease id if the host is under its cap, else None."""
@@ -152,8 +146,6 @@ class SharedLimiterState:
 
     def release(self, host: str, lease: str) -> None:
         self._redis.zrem(self._lease_key(host), lease)
-
-    # -- penalties ----------------------------------------------------- #
 
     def penalize(self, host: str, seconds: float) -> None:
         """Pause a host for every worker, not just this one.
@@ -170,8 +162,6 @@ class SharedLimiterState:
         """Seconds left on this host's pause. The key's own TTL is the clock."""
         ttl = self._redis.pttl(self._penalty_key(host))
         return ttl / 1000.0 if ttl and ttl > 0 else 0.0
-
-    # -- housekeeping -------------------------------------------------- #
 
     def clear(self, host: Optional[str] = None) -> None:
         pattern = f"ratelimit:*:{host}" if host else "ratelimit:*"

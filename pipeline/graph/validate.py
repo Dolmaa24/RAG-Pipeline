@@ -49,10 +49,6 @@ class Verdict(str, Enum):
     UNKNOWN = "unknown"
 
 
-# --------------------------------------------------------------------------- #
-# Types
-# --------------------------------------------------------------------------- #
-
 #: The extractor's ``type`` field is free text, so it is bucketed before use.
 _TYPE_BUCKETS: dict[str, tuple[str, ...]] = {
     "person": ("person", "people", "individual", "human", "employee", "executive"),
@@ -79,11 +75,6 @@ def bucket(raw_type: str) -> str:
         if any(word in text for word in words):
             return name
     return "unknown"
-
-
-# --------------------------------------------------------------------------- #
-# Rules
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -138,10 +129,6 @@ def rule_for(relation: str) -> Optional[Rule]:
             return rule
     return None
 
-
-# --------------------------------------------------------------------------- #
-# The checks
-# --------------------------------------------------------------------------- #
 
 #: A passive clause puts the agent after "by": "was acquired by Northwind".
 _PASSIVE_WINDOW = 24

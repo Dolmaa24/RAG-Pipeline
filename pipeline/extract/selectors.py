@@ -156,11 +156,6 @@ def spec_key(url: str, schema_hash: str) -> tuple[str, str]:
     return domain, prefix
 
 
-# --------------------------------------------------------------------------- #
-# Applying a spec
-# --------------------------------------------------------------------------- #
-
-
 def apply_spec(spec: SelectorSpec, html: str, schema_hint: dict) -> tuple[dict, float]:
     """Run a spec against a page. Returns the record and its fill rate."""
     from selectolax.lexbor import LexborHTMLParser
@@ -210,10 +205,6 @@ def _apply_rule(tree, rule: SelectorRule) -> Any:
         return values
     return values[0] if values else None
 
-
-# --------------------------------------------------------------------------- #
-# Learning a spec
-# --------------------------------------------------------------------------- #
 
 _LEARN_PROMPT = """You are writing a reusable web scraper for one website.
 
@@ -440,11 +431,6 @@ def _selector_is_sane(selector: str) -> bool:
     return True
 
 
-# --------------------------------------------------------------------------- #
-# DOM skeleton
-# --------------------------------------------------------------------------- #
-
-
 def dom_skeleton(html: str, max_chars: int = SKELETON_MAX_CHARS) -> str:
     """A pruned outline of the DOM: CSS path, then what is there.
 
@@ -534,11 +520,6 @@ def _node_value(node) -> Optional[str]:
         return None
     text = re.sub(r"\s+", " ", text)[:120]
     return f'"{text}"'
-
-
-# --------------------------------------------------------------------------- #
-# Storage
-# --------------------------------------------------------------------------- #
 
 
 #: How many times to try authoring a spec for one (domain, prefix, schema)

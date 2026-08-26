@@ -106,11 +106,6 @@ def test_a_backend_is_built_once_per_choice(monkeypatch, backends):
     assert built.count("ollama") == 1
 
 
-# --------------------------------------------------------------------------- #
-# Output ceiling as a rate-limit setting
-# --------------------------------------------------------------------------- #
-
-
 def test_the_output_ceiling_is_not_hardcoded_above_a_free_tier():
     """max_tokens is reserved against the tokens-per-minute budget up front.
 
@@ -129,11 +124,6 @@ def test_the_output_ceiling_is_not_hardcoded_above_a_free_tier():
     assert "max_tokens=8192" not in source
     assert "max_tokens=config.GROQ_MAX_OUTPUT_TOKENS" in source
     assert config.GROQ_MAX_OUTPUT_TOKENS <= 8000
-
-
-# --------------------------------------------------------------------------- #
-# Authoring selectors is its own job
-# --------------------------------------------------------------------------- #
 
 
 def test_selector_learning_can_differ_from_bulk(monkeypatch, backends):
