@@ -69,6 +69,22 @@ _EXTENSION_KIND: dict[str, ResourceKind] = {
     "asp": ResourceKind.HTML, "aspx": ResourceKind.HTML, "jsp": ResourceKind.HTML,
 }
 
+#: What a crawl that names no file types collects on its own. Documents, data
+#: and archives are what someone means by "extract what you find"; images,
+#: audio and video are usually the page's own furniture, and collecting them
+#: implicitly means OCR on every logo and a transcription of every banner
+#: video. Naming them in ``collect_extensions`` still works and is explicit,
+#: which is the right way to ask for a site's images.
+_IMPLICITLY_COLLECTED: frozenset[ResourceKind] = frozenset(
+    {
+        ResourceKind.DOCUMENT,
+        ResourceKind.TABULAR,
+        ResourceKind.DATA,
+        ResourceKind.ARCHIVE,
+        ResourceKind.EMAIL,
+    }
+)
+
 #: Query parameters that generate a new URL for the same content. Following
 #: them is how a crawl discovers ten thousand copies of one page.
 _TRAP_PARAMS: frozenset[str] = frozenset(
@@ -211,6 +227,22 @@ class CrawlScope:
         # No extension, or a page extension: treat as a page worth following.
         kind = _EXTENSION_KIND.get(extension)
         if extension and kind is not ResourceKind.HTML:
+            # A crawl naming no file types means "extract whatever you find",
+            # and that has to include the files. Without this branch such a
+            # crawl collects HTML and nothing else: the target check above
+            # declines (there is no filter for it to match) and the page rule
+            # here refuses anything that is not a page, so every document on
+            # the site falls between the two. Measured on one page linking 54
+            # syllabus PDFs, the crawl returned 14 navigation pages and no PDFs.
+            #
+            # Unlike a named target, this is still bounded by depth. Naming
+            # ``collect_extensions`` is asking for those files wherever they
+            # are; naming none is asking for what lies within the depth already
+            # set, which the check above has just applied.
+            if self.collects_everything and kind in _IMPLICITLY_COLLECTED:
+                if self._include and not any(pattern.search(url) for pattern in self._include):
+                    return LinkDecision(LinkVerdict.SKIP, "did not match an include pattern")
+                return LinkDecision(LinkVerdict.COLLECT, f"document (.{extension})")
             return LinkDecision(LinkVerdict.SKIP, f"not a target and not a page (.{extension})")
 
         if self._include and not any(pattern.search(url) for pattern in self._include):
