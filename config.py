@@ -235,17 +235,23 @@ class EngineConfig(BaseSettings):
     #: _JSON_SCHEMA_MODELS, so extraction can ask the API to enforce the shape
     #: rather than validating afterwards.
     #:
-    #: That last part is worth verifying rather than trusting: there are
-    #: reports of this model ignoring response_format json_schema and returning
-    #: prose. Nothing breaks if it does — the reply is parsed and validated on
-    #: this side and retried once, exactly as Ollama's is — but the guarantee
-    #: would be imaginary. Watch for llm.retrying_for_schema in the logs, and
-    #: drop "openai/gpt-oss" from _JSON_SCHEMA_MODELS if it shows up often.
+    #: Verified, and it does not: asked for response_format json_schema this
+    #: model answers 400, so it has been removed from _JSON_SCHEMA_MODELS and
+    #: uses JSON mode with validation on this side, exactly as Ollama does.
     #:
     #: openai/gpt-oss-20b is half the price and twice the speed if the
     #: tokens-per-minute ceiling on the free tier is what binds.
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_TIMEOUT: float = 60.0
+    #: Ceiling on generated tokens per Groq call, and it is a rate-limit
+    #: setting rather than a length one. Groq reserves ``max_tokens`` against
+    #: the tokens-per-minute budget *before* running the request, so asking for
+    #: more output than the whole per-minute allowance is refused outright — a
+    #: two-word prompt with max_tokens=8192 returns 413 on an 8000 TPM account,
+    #: every time, with a message about the request being too large that has
+    #: nothing to do with the prompt. Keep this comfortably under the TPM limit
+    #: shown by ``x-ratelimit-limit-tokens``.
+    GROQ_MAX_OUTPUT_TOKENS: int = 4096
     #: Never send content to a hosted model. Forces the Ollama backend even
     #: when GROQ_BACKEND would be faster.
     LOCAL_ONLY: bool = False

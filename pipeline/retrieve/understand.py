@@ -256,12 +256,16 @@ def understand(
         sub_queries=sub_queries,
         step_back=str(data.get("step_back") or "").strip(),
         entities=[str(e).strip() for e in (data.get("entities") or []) if str(e).strip()],
-        filters=inferred,
+        # Cleaned here rather than at the merge below, which only runs when the
+        # caller supplied filters of their own — the uncommon case. Cleaning
+        # there left the ordinary path unchecked *and* cached the bad value, so
+        # one wrong guess kept emptying the search until the process restarted.
+        filters=drop_unknown_values(inferred),
     )
     _remember(key, plan.model_copy(deep=True))
 
     if filters is not None and not filters.is_empty():
-        plan.filters = _merge(inferred, filters)
+        plan.filters = _merge(plan.filters, filters)
 
     log.info(
         "retrieve.understand.done",
@@ -273,7 +277,12 @@ def understand(
 
 
 def _merge(inferred: MetadataFilter, explicit: MetadataFilter) -> MetadataFilter:
-    """Caller-supplied fields win over inferred ones, field by field."""
+    """Caller-supplied fields win over inferred ones, field by field.
+
+    ``inferred`` has already been through :func:`drop_unknown_values` by the
+    time it reaches here; explicit values are never checked, because a caller
+    who filters by hand and gets nothing has learned something true.
+    """
     merged = inferred.model_dump()
     for field, value in explicit.model_dump().items():
         if value:
@@ -281,4 +290,63 @@ def _merge(inferred: MetadataFilter, explicit: MetadataFilter) -> MetadataFilter
     return MetadataFilter(**merged)
 
 
-__all__ = ["QueryPlan", "clear_cache", "is_trivial", "understand"]
+def drop_unknown_values(inferred: MetadataFilter) -> MetadataFilter:
+    """Remove inferred values the corpus does not actually hold.
+
+    Filtering happens *before* retrieval, deliberately, so that a top-k is a
+    real top-k rather than whatever survived a filter afterwards. The cost is
+    that one wrong value returns nothing at all — and nothing at all is exactly
+    what an unanswerable question returns, so the two are indistinguishable to
+    whoever asked.
+
+    Asked "what are the rules for using articles in English", the model read
+    "in English" as a language filter and produced ``language: ["English"]``.
+    The store holds the ISO code ``en``. Five matching passages became zero, and
+    the answer said the corpus did not cover it — about a document that was
+    entirely about the subject.
+
+    Only *inferred* values are dropped. A caller who filters by hand and gets
+    nothing has learned something true about their corpus; a model that guessed
+    a value out of a sentence has not, and should not be able to silence a
+    search by guessing wrongly.
+    """
+    values = inferred.model_dump()
+    if not any(values.values()):
+        return inferred
+
+    try:
+        from pipeline.store.lance import LanceStore
+
+        store = LanceStore()
+        if store.table is None:
+            return inferred
+    except Exception as exc:  # a filter check must never fail a search
+        log.debug("retrieve.filter_check_skipped", error=repr(exc))
+        return inferred
+
+    cleaned = dict(values)
+    for field, wanted in values.items():
+        if not isinstance(wanted, list) or not wanted:
+            continue
+        try:
+            known = {str(v).strip().lower() for v in store.distinct(field, limit=200)}
+        except Exception:
+            continue
+        if not known:
+            continue
+
+        kept = [v for v in wanted if str(v).strip().lower() in known]
+        if kept != wanted:
+            log.info(
+                "retrieve.filter_dropped",
+                field=field,
+                dropped=[v for v in wanted if v not in kept],
+                known=sorted(known)[:8],
+            )
+            metrics.incr("retrieve.filter_dropped")
+        cleaned[field] = kept
+
+    return MetadataFilter(**cleaned)
+
+
+__all__ = ["QueryPlan", "clear_cache", "drop_unknown_values", "is_trivial", "understand"]

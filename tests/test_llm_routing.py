@@ -104,3 +104,28 @@ def test_a_backend_is_built_once_per_choice(monkeypatch, backends):
     llm.get_backend(role=llm.BULK)
     llm.get_backend(role=llm.BULK)
     assert built.count("ollama") == 1
+
+
+# --------------------------------------------------------------------------- #
+# Output ceiling as a rate-limit setting
+# --------------------------------------------------------------------------- #
+
+
+def test_the_output_ceiling_is_not_hardcoded_above_a_free_tier():
+    """max_tokens is reserved against the tokens-per-minute budget up front.
+
+    Asking for 8192 output tokens on an 8000 TPM account returns 413 for a
+    two-word prompt, every time, with a message about the request being too
+    large that has nothing to do with the prompt. It was previously hardcoded,
+    and the 413 handler read it as a rate limit and retried it with backoff —
+    forever, since no amount of waiting shrinks a constant.
+    """
+    import inspect
+
+    from config import config
+    from pipeline.extract.llm import groq
+
+    source = inspect.getsource(groq)
+    assert "max_tokens=8192" not in source
+    assert "max_tokens=config.GROQ_MAX_OUTPUT_TOKENS" in source
+    assert config.GROQ_MAX_OUTPUT_TOKENS <= 8000

@@ -30,7 +30,13 @@ log = get_logger("llm.groq")
 #: not named here still works — it falls back to JSON mode and gets the same
 #: validation Ollama's output gets. Asking an unsupported model for a schema is
 #: a hard 400, which :meth:`GroqBackend._is_schema_unsupported` recovers from.
-_JSON_SCHEMA_MODELS = ("openai/gpt-oss", "moonshotai/kimi", "qwen")
+#: ``openai/gpt-oss`` was here and has been removed: asked for a schema,
+#: openai/gpt-oss-120b answers 400, and while :meth:`_is_schema_unsupported`
+#: recovers from that, it costs a wasted round trip on the first call of every
+#: worker process and the guarantee was never real. Measured, not assumed —
+#: the community reports of it *silently* ignoring the schema describe a
+#: different failure than the one this account sees.
+_JSON_SCHEMA_MODELS = ("moonshotai/kimi", "qwen")
 
 #: Models the API has told us at runtime do not support schemas. Remembered per
 #: process so one 400 is paid once rather than on every subsequent call.
@@ -78,7 +84,7 @@ class GroqBackend:
             messages=[{"role": "user", "content": user_message}],
             response_format=response_format,
             temperature=0.0,
-            max_tokens=8192,
+            max_tokens=config.GROQ_MAX_OUTPUT_TOKENS,
         )
 
     # ------------------------------------------------------------------ #
@@ -114,7 +120,7 @@ class GroqBackend:
                 tools=[_as_groq_tool(tool) for tool in tools] or None,
                 tool_choice=tool_choice if tools else None,
                 temperature=0.0,
-                max_tokens=4096,
+                max_tokens=config.GROQ_MAX_OUTPUT_TOKENS,
             )
         except Exception as exc:
             raise self._classify(exc) from exc
@@ -273,6 +279,12 @@ class GroqBackend:
             # Groq answers a tokens-per-minute overage with 413, not 429. That
             # one *is* worth retrying after backoff; a genuinely oversized
             # single request is not, and no amount of waiting shrinks it.
+            #
+            # This only tells those apart correctly because GROQ_MAX_OUTPUT_TOKENS
+            # is kept under the TPM limit. Groq reserves max_tokens against the
+            # budget before running anything, so a max_tokens larger than the
+            # whole allowance produced a permanent 413 that read as a rate
+            # limit — and was retried, with backoff, forever.
             if "per minute" in message.lower() or "tpm" in message.lower():
                 return TransientExtractError(f"Groq token-rate limit: {message[:200]}")
             return ExtractError(

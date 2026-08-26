@@ -6,7 +6,13 @@ import pytest
 
 from config import config
 from pipeline.retrieve.filters import MetadataFilter
-from pipeline.retrieve.understand import QueryPlan, is_trivial, understand
+from pipeline.retrieve.understand import (
+    QueryPlan,
+    _merge,
+    drop_unknown_values,
+    is_trivial,
+    understand,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,3 +208,185 @@ def test_an_empty_query_is_handled():
     plan = understand("   ")
     assert plan.trivial is True
     assert plan.queries() == []
+
+
+# --------------------------------------------------------------------------- #
+# Inferred filters that the corpus cannot satisfy
+# --------------------------------------------------------------------------- #
+
+
+def test_an_inferred_value_the_corpus_lacks_is_dropped(monkeypatch):
+    """The failure this exists for, in one line.
+
+    Asked "what are the rules for using articles in English", the model read
+    "in English" as a language filter and produced ``language: ["English"]``.
+    The store holds the ISO code ``en``. Filtering happens before retrieval, so
+    five matching passages became zero and the answer reported that the corpus
+    did not cover it — about a document entirely about the subject.
+    """
+    from pipeline.retrieve.filters import MetadataFilter
+
+    class FakeStore:
+        table = object()
+
+        def distinct(self, field, limit=200):
+            return {"language": ["en"], "doc_type": ["html"]}.get(field, [])
+
+    monkeypatch.setattr(
+        "pipeline.store.lance.LanceStore", lambda *a, **k: FakeStore()
+    )
+
+    cleaned = drop_unknown_values(MetadataFilter(language=["English"]))
+    assert cleaned.language == []
+
+
+def test_a_value_the_corpus_holds_survives(monkeypatch):
+    from pipeline.retrieve.filters import MetadataFilter
+
+    class FakeStore:
+        table = object()
+
+        def distinct(self, field, limit=200):
+            return {"language": ["en"], "doc_type": ["html", "document"]}.get(field, [])
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", lambda *a, **k: FakeStore())
+
+    cleaned = drop_unknown_values(MetadataFilter(doc_type=["html"]))
+    assert cleaned.doc_type == ["html"]
+
+
+def test_matching_ignores_case(monkeypatch):
+    from pipeline.retrieve.filters import MetadataFilter
+
+    class FakeStore:
+        table = object()
+
+        def distinct(self, field, limit=200):
+            return ["Finance"] if field == "department" else []
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", lambda *a, **k: FakeStore())
+
+    assert drop_unknown_values(
+        MetadataFilter(department=["finance"])
+    ).department == ["finance"]
+
+
+def test_a_caller_s_own_filter_is_never_dropped(monkeypatch):
+    """A caller who filters by hand and gets nothing has learned something true.
+
+    A model that guessed a value out of a sentence has not, and should not be
+    able to silence a search by guessing wrongly. Cleaning therefore happens to
+    the inferred half only, before the merge — so this checks that the explicit
+    half survives a merge untouched even when the corpus does not hold it.
+    """
+    from pipeline.retrieve.filters import MetadataFilter
+
+    class FakeStore:
+        table = object()
+
+        def distinct(self, field, limit=200):
+            return ["en"]
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", lambda *a, **k: FakeStore())
+
+    inferred = drop_unknown_values(MetadataFilter(language=["English"]))
+    assert inferred.language == []
+
+    merged = _merge(inferred, MetadataFilter(department=["nonexistent"]))
+    assert merged.language == []
+    assert merged.department == ["nonexistent"]
+
+
+def test_an_empty_filter_needs_no_store(monkeypatch):
+    from pipeline.retrieve.filters import MetadataFilter
+
+    def explode(*args, **kwargs):
+        raise AssertionError("the store was consulted for an empty filter")
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", explode)
+    assert drop_unknown_values(MetadataFilter()).model_dump() == MetadataFilter().model_dump()
+
+
+def test_a_store_that_cannot_be_read_leaves_filters_alone(monkeypatch):
+    # A filter check must never fail a search.
+    from pipeline.retrieve.filters import MetadataFilter
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("lance is down")
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", explode)
+    assert drop_unknown_values(MetadataFilter(language=["English"])).language == ["English"]
+
+
+def test_an_inferred_filter_is_cleaned_on_the_ordinary_path(monkeypatch):
+    """The path with no caller-supplied filters, which is most of them.
+
+    The first version of this check lived in ``_merge``, which only runs when
+    the caller passed filters of their own. The ordinary path went unchecked
+    *and* cached the bad value, so one wrong guess kept emptying the search
+    until the process restarted.
+    """
+    from pipeline.retrieve.filters import MetadataFilter
+    from pipeline.retrieve.understand import clear_cache
+
+    class FakeStore:
+        table = object()
+
+        def distinct(self, field, limit=200):
+            return ["en"] if field == "language" else []
+
+    class FakeBackend:
+        name, model = "fake", "m"
+
+        def complete_json(self, **kwargs):
+            from pipeline.extract.llm.base import LLMResponse
+
+            return LLMResponse(
+                data={"sub_queries": [], "step_back": "", "entities": [],
+                      "filters": {"language": ["English"]}},
+                backend="fake", model="m",
+            )
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", lambda *a, **k: FakeStore())
+    monkeypatch.setattr(
+        "pipeline.extract.llm.get_backend", lambda **kwargs: FakeBackend()
+    )
+    clear_cache()
+
+    plan = understand("what are the rules for articles in English?", force=True)
+    assert plan.filters.language == [], plan.filters.model_dump()
+
+
+def test_the_cache_does_not_hold_an_uncleaned_filter(monkeypatch):
+    # _remember stores the plan, so a value cleaned after caching would come
+    # straight back on the next identical question.
+    from pipeline.retrieve.understand import _cache_key, _cached, clear_cache
+
+    class FakeStore:
+        table = object()
+
+        def distinct(self, field, limit=200):
+            return ["en"] if field == "language" else []
+
+    class FakeBackend:
+        name, model = "fake", "m"
+
+        def complete_json(self, **kwargs):
+            from pipeline.extract.llm.base import LLMResponse
+
+            return LLMResponse(
+                data={"sub_queries": [], "step_back": "", "entities": [],
+                      "filters": {"language": ["English"]}},
+                backend="fake", model="m",
+            )
+
+    monkeypatch.setattr("pipeline.store.lance.LanceStore", lambda *a, **k: FakeStore())
+    monkeypatch.setattr("pipeline.extract.llm.get_backend", lambda **kwargs: FakeBackend())
+    clear_cache()
+
+    question = "another question about articles in English?"
+    understand(question, force=True)
+    cached = _cached(_cache_key(question, False))
+
+    assert cached is not None
+    assert cached.filters.language == []
