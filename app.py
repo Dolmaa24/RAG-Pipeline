@@ -62,10 +62,6 @@ def upload_file(file: UploadFile = File(...)) -> dict:
     return {"url": url}
 
 
-# --------------------------------------------------------------------------- #
-# Request models
-# --------------------------------------------------------------------------- #
-
 
 class ExtractionRequest(BaseModel):
     url: str = Field(..., min_length=1, description="Any http(s) URL.")
@@ -129,9 +125,6 @@ class ExtractionRequest(BaseModel):
                 "url must start with http://, https://, or upload:// "
                 "(the reference returned by /api/v1/upload)"
             )
-        # Validated here as well as in the fetch stage, so a malformed
-        # reference is a 422 the caller can read rather than a queued task
-        # that fails a minute later on a worker they are not watching.
         if not upload_id(value):
             raise ValueError("upload reference is malformed; use the url /api/v1/upload returned")
         return value

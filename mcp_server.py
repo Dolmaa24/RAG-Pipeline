@@ -33,11 +33,6 @@ import inspect
 import os
 from typing import Annotated, Any, Callable
 
-# Set before anything heavy is imported. Under stdio, stdout *is* the protocol
-# channel: one stray progress bar written there and the client sees a parse
-# error instead of a tool list. tqdm and huggingface_hub both write to stderr
-# by default and so are already safe, but they are one library default away
-# from not being, and a server is the wrong place to find that out.
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
