@@ -107,6 +107,14 @@ empty and every in-scope page is extracted instead, which is the "run this
 schema over every product page" shape (and the shape where tier 2's learned
 selector specs pay off most).
 
+Leaving it empty also collects the **documents** it meets — PDFs, spreadsheets,
+data files, archives, email — because "extract what you find" has to include
+the files. Images, audio and video are not collected implicitly: doing so would
+mean OCR on every logo and a transcription of every banner. Ask for those by
+name and you get them. One asymmetry is deliberate: a *named* target is
+collected at any depth, since hunting for PDFs means the one three hops down
+counts, while a document collected implicitly stays inside the depth you set.
+
 Poll it, and the files it found *are* the answer:
 
 ```bash
@@ -168,15 +176,35 @@ The pipeline asks permission before it fetches, and the gates are checked on
   dropping it. Cached per origin, fetched at most once per TTL.
 - **Per-host rate limiting** — token bucket plus a concurrency cap, honouring
   `Crawl-delay` and `Retry-After`, and slowing down *before* a 429 by reading
-  the server's own `RateLimit-*` headers.
+  the server's own `RateLimit-*` headers. **The budget is one per pipeline, not
+  one per worker.** Those primitives are `threading` ones, which coordinate a
+  thread pool and nothing between processes, so each `--pool=prefork` child had
+  its own bucket and the configured rate was silently multiplied by the number
+  of children. Measured with two processes at a configured 2.0/s, the gaps
+  alternated `0.001, 0.501, 0.001` — both firing together, then both sleeping.
+  The state now lives in Redis (`RATELIMIT_SHARED`, on by default), with the
+  clock read from Redis too, because `time.monotonic()` means nothing across
+  processes. Redis unreachable falls back to per-process limits with a warning.
 - **Anti-bot detection** — a Cloudflare interstitial returns **HTTP 200**.
   Without this check the pipeline pays for a 300-second model call to extract
   product fields from "Checking your browser". A detected wall raises, trips the
   breaker permanently, and prints what to do instead. It is never retried or
   evaded: that is a stated refusal, and working around it is a different
-  activity with different rules.
+  activity with different rules. Vendor interstitials are not the only shape:
+  an in-house appliance answering "User validation required to continue" at
+  HTTP 200 is recognised too, and had to be, because it serves that page for
+  `/robots.txt` as readily as for a page — unrecognised, a challenge parses as
+  a robots file with no rules and the crawler concludes the site permits
+  everything.
 - **Circuit breaker** per host, so a failing site gets one probe rather than
   30,000 retries.
+- **Legacy TLS, per host.** A site whose TLS predates RFC 5746 fails the
+  handshake under OpenSSL 3 while `curl` on macOS fetches it happily — a fair
+  number of government and university sites are in that state. `TLS_LEGACY_HOSTS`
+  grants the exception to named hosts (a bare domain covers its subdomains)
+  rather than to the whole crawler, and the match is exact-or-parent so
+  `evil-example.ac.in` inherits nothing from `example.ac.in`. Certificate
+  verification is unchanged either way; only the handshake is.
 - **SSRF guard** — a submitted URL cannot make a worker fetch `127.0.0.1` or
   `169.254.169.254`.
 - **Size caps** enforced *while streaming*, so a 10 GB response is abandoned
@@ -693,8 +721,12 @@ Then check everything came up:
 curl -s localhost:8000/health | python3 -m json.tool
 ```
 
-`workers_online` should be 4 (the io and cpu pools report one each, plus
-agents), and `queue_depth` should list `io`, `cpu` and `agents`.
+`workers_online` should be 3 — one per pool, `io`, `cpu` and `agents`,
+whatever each pool's concurrency — and `queue_depth` should list all three.
+
+If that call *hangs* rather than refusing, a stale process from an earlier run
+still holds the port and `run.sh` will have started workers without an API.
+`lsof -nP -iTCP:8000,8501 -sTCP:LISTEN` names it.
 
 **Workers do not hot-reload.** The API runs with `--reload`, so editing a route
 takes effect immediately; editing anything a *task* runs — the pipeline, the
@@ -843,9 +875,9 @@ For Claude Desktop, add to `claude_desktop_config.json`:
 }
 ```
 
-**Seven read-only tools are exposed by default** — `corpus_profile`,
+**Eight read-only tools are exposed by default** — `corpus_profile`,
 `search_corpus`, `answer_from_corpus`, `graph_neighbors`, `graph_path`,
-`fetch_chunk`, `poll_task`. Tools that reach the network or change the corpus
+`graph_relations`, `fetch_chunk`, `poll_task`. Tools that reach the network or change the corpus
 are *not advertised at all* unless you turn them on:
 
 ```bash
@@ -999,6 +1031,39 @@ An interactive preference that is unavailable falls back to the bulk backend
 rather than failing — a missing Groq key should make search slower, not broken.
 An *explicitly named* backend still fails loudly, because naming one is a
 decision about where content may go rather than a preference about speed.
+
+### The cheapest place to spend a hosted model
+
+Authoring a domain's selector spec is the one call here whose economics invert
+the argument above. Extraction runs once per *document*; learning runs once per
+*domain*, and its output is replayed free on every page after. One good call
+removes a model call from every page of that site, for as long as the markup
+holds.
+
+It is also the job a 3B model is worst at. On `books.toscrape.com` —
+the site tier 2 is measured on above — `qwen2.5:3b` answered a three-field
+schema with `td[content='£51.77']`, an attribute absent from the markup,
+describing an element the pruned skeleton had already handed it as
+`p.price_color`. Two of three rules were dead, the spec fell below
+`MIN_FILL_RATE` and was refused, learning was abandoned for the domain after
+the second failure, and every page then paid tier 3.
+
+```bash
+LLM_SELECTOR_BACKEND=groq       # one call per domain; replayed free after
+```
+
+Same site, same schema:
+
+```
+learned once   3.54s
+replayed       1.00s
+replayed       0.98s
+```
+
+`tier2_learned` stays at 1 while `tier2` climbs. Unset follows `LLM_BACKEND`;
+an unreachable hosted model falls back rather than failing, and `local_only`
+still forces Ollama — learning sends a DOM skeleton to the model, so the
+privacy switch binds here too.
 
 ### Ollama settings that matter
 
