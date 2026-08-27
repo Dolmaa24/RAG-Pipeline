@@ -86,7 +86,27 @@ class GraphStore:
         self.close()
 
     def close(self) -> None:
-        """Release the database, and with it the lock other processes need."""
+        """Release the database, and with it the lock other processes need.
+
+        Kuzu's own ``close()`` is called rather than the references merely
+        dropped. Dropping them frees the handle only when the last reference
+        goes, and inside a long-lived worker one is easy to keep by accident --
+        a traceback holding the frame is enough. The lock then outlives the
+        write, and every later search fails with "Could not set lock on file"
+        while the worker that wrote the graph sits idle holding it.
+
+        Errors are swallowed: a handle that cannot be closed is not a reason to
+        fail the ingest that already succeeded, and it is closed again on the
+        next attempt anyway.
+        """
+        for handle in (self._read_conn, self._read_db, self._conn, self._db):
+            closer = getattr(handle, "close", None)
+            if closer is None:
+                continue
+            try:
+                closer()
+            except Exception as exc:
+                log.debug("graph.close_failed", error=repr(exc))
         self._read_conn = None
         self._read_db = None
         self._conn = None
