@@ -24,6 +24,12 @@ __pycache__/
 # Pipeline artifacts
 output/
 
+# Playground conversations. Local state, and WAL writes two siblings alongside
+# the database file that are meaningless without it.
+playground.db
+playground.db-wal
+playground.db-shm
+
 # Code the build workflow generated. Model-written, never reviewed by anyone
 # unless someone chose to, and regenerated on every build — it is output, not
 # source, and a commit of it would be a commit of something nobody wrote.

@@ -252,6 +252,27 @@ class EngineConfig(BaseSettings):
     #: wrong skill hands the agent a prompt about the wrong domain. Trigger
     #: words, not this, are what routes an intent that names its domain.
     SKILLS_MIN_MARGIN: float = 0.08
+
+    #: Where threaded conversations live. SQLite rather than Mongo because
+    #: MONGO_URI is optional and unset by default -- an extraction record that
+    #: falls through to a JSONL file can be re-run, and a conversation you
+    #: cannot reopen is simply gone.
+    PLAYGROUND_DB_PATH: str = "playground.db"
+    #: How many tokens of past conversation to replay. Not an output cap:
+    #: OLLAMA_NUM_CTX is 8192 for input *and* output together, so with 4096
+    #: reserved for the reply the whole prompt must fit in about 4096. Measured
+    #: against the corpus role: ~300 for the system prompt, ~1000 for seven tool
+    #: schemas, ~100 for the question. This leaves room for a long question on
+    #: top of what it allows.
+    PLAYGROUND_HISTORY_TOKENS: int = 2400
+    #: Fold evicted turns into a running summary rather than dropping them.
+    #: Off means a long thread simply forgets its beginning, which is cheaper
+    #: and occasionally what you want.
+    PLAYGROUND_SUMMARISE: bool = True
+    #: Characters per token, for deciding what fits. A real tokenizer is a
+    #: dependency and a model download for a number that only has to be roughly
+    #: right; 4 is the usual English approximation and errs toward sending less.
+    PLAYGROUND_CHARS_PER_TOKEN: int = 4
     #: Where a synthesized skill waits for a person to read it. Relative to
     #: SKILLS_DIR, and skipped by the loader: a draft is a model's proposal for
     #: an agent's own system prompt, and nothing writes one of those into the
