@@ -850,6 +850,180 @@ unsupported claims caught and 29% of supported sentences flagged wrongly
 `AGENT_VERIFY=false` is there if the false alarms bother you more than the
 misses.
 
+## Skills: one folder per domain
+
+The pipeline shipped with two specialists, both hard-coded and both
+domain-blind: one that searches the corpus and one that fetches what the corpus
+lacks. A skill is a third thing — a domain, described in a file.
+
+```
+skills/health/SKILL.md
+skills/ecommerce/SKILL.md
+skills/insurance/SKILL.md
+skills/school/SKILL.md
+```
+
+Each is YAML frontmatter and a markdown body. The frontmatter names the domain's
+trigger words, the tools its specialist needs, the fields worth extracting from
+its pages, and the entity and relation types its graph should use. The body is
+the specialist's system prompt.
+
+Say what you want done and the domain is worked out from the words:
+
+```bash
+curl -X POST localhost:8000/api/v1/task -H 'Content-Type: application/json' -d '{
+  "intent": "Which policies cover physiotherapy?"
+}'
+```
+
+```json
+{
+  "status": "queued",
+  "matched": {"skill": "insurance", "how": "trigger", "confidence": 2.0,
+              "why": "insurance matched on its own trigger words"},
+  "agent": {"role": "insurance", "tools": ["corpus_profile", "search_corpus", "..."]},
+  "poll": "/api/v1/investigations/..."
+}
+```
+
+The result is an ordinary investigation, so it polls where investigations do.
+`GET /api/v1/skills` lists what is loaded, and `GET /api/v1/skills/match?intent=…`
+dry-runs the routing without queueing anything.
+
+`POST /api/v1/extract` takes a `skill` too. Given one, `schema_template` becomes
+optional — the skill's own fields are used — and the graph extractor is told
+which entity and relation types that domain uses.
+
+### Routing costs nothing
+
+No model call decides which skill runs. Trigger words come first, matched on
+word boundaries with plurals folded, so "which **policies** cover physiotherapy"
+finds the trigger `policy`. Only when nothing fires, or two skills tie, is the
+intent embedded and compared against the descriptions — with the embedder that
+is already resident in the agents worker.
+
+That fallback is deliberately hard to pass, and the measurement is why. Over
+five domain intents carrying no trigger word and six deliberately generic
+questions, the raw similarities overlapped completely — 0.480–0.672 against
+0.508–0.620 — so an absolute threshold separates nothing. The **margin** over
+the runner-up does: 0.022–0.132 against 0.009–0.062. At `SKILLS_MIN_MARGIN=0.08`
+every generic question is correctly refused and three of the five bare domain
+intents are refused with them.
+
+Biased that way on purpose. An unmatched intent runs the generic corpus
+specialist — what every question got before skills existed, and an adequate
+answer. A wrong skill hands the agent a prompt about the wrong domain and a tool
+subset chosen for it, which is the more expensive mistake.
+
+### A skill cannot grant itself a permission
+
+The tools a skill names are intersected with what the request budgeted, so a
+skill listing `crawl_site` gets it stripped on a read-only run, and a skill
+declaring `requires: write` is absent from one entirely rather than offered and
+refused. Effects come from `allow_network` and `allow_write` on the request and
+from nowhere else — the same rule the tool registry and the MCP server already
+follow.
+
+A skill also cannot run code: the frontmatter goes through `yaml.safe_load` and
+the body is prompt text. Nothing in a skill folder is imported or executed. But
+the body *does* reach a model's system prompt, so a skill file carries the trust
+level of `pipeline/agents/roles.py` — review one the same way, and never load
+skills from an upload or a URL.
+
+`skills/README.md` has the field reference and how to add one. The API picks up
+an edited skill on its own; **Celery workers do not, so restart them.**
+
+### Drafting a skill for a domain nothing covers
+
+Ask for something outside the four shipped domains and the honest answer is that
+nothing matches:
+
+```
+"make a Baristo system"  ->  triggers: none, margin 0.023 (needs 0.08)  ->  no skill
+```
+
+`POST /api/v1/skills/draft` turns that into a proposal. A model describes the
+domain — vocabulary, extraction fields, entity types, the specialist's prompt,
+and the roster of workers a build would use — and it lands in `skills/_drafts/`,
+**which the loader ignores**. It becomes a real skill when a person approves it.
+
+That gate is not ceremony. A skill's body is an agent's system prompt, so an
+auto-installed draft would be a model writing its own instructions, and there is
+no reviewing that afterwards because by then it has run. Two things a draft can
+never be, enforced in code rather than requested in the prompt: `requires` is
+forced to `read`, and every tool name is validated against the registry.
+
+The model is asked for **JSON against a schema**, not for markdown, and the
+frontmatter is rendered here. A model asked to write YAML by hand gets it wrong
+often enough to matter; one handed a schema through Groq's `json_schema` mode
+cannot.
+
+### Building the domain
+
+A skill whose frontmatter declares an `agents:` block can be built. The workers
+are the domain's own actors:
+
+```yaml
+agents:
+  - name: receptionist
+    purpose: Takes orders, validates them, manages the queue.
+    writes: [orders.py]
+  - name: machine
+    purpose: Drives the espresso machine and tracks brew state.
+    writes: [machine.py]
+```
+
+```
+contract  ->  receptionist  ->  machine  ->  delivery  ->  cleaner  ->  tests
+```
+
+The **contract step runs first**, writing `models.py` and a `README.md` naming
+the interfaces, and every worker after it is handed that file. This is the whole
+reason the output composes. Both backends cap generation at 4096 tokens
+(`OLLAMA_NUM_PREDICT`, `GROQ_MAX_OUTPUT_TOKENS`), so each worker is its own call,
+and four independent calls invent four incompatible ideas of what an order is.
+
+Files land in `workspace/<skill>/`, gitignored. Builds run on their own Celery
+queue, because a build is several whole-file generations and would otherwise sit
+in front of every investigation.
+
+`LLM_CODE_BACKEND` defaults to Groq — the only setting in this project whose
+default is the hosted model. It is a capacity judgement, not a preference:
+`llama3.2:3b` on an 8 GB machine does not hold a contract across five
+generations, and the failure is not a worse file but modules that do not import
+each other.
+
+**Expect a plausible scaffold, not a working application.**
+
+### Writing code and running it are separate permissions
+
+Two new effects join `read`, `network` and `write`:
+
+| Effect | Granted by | What it allows |
+|---|---|---|
+| `code` | `BUILD_CODE_CALLS` on a build | Writing one source file into the sandbox |
+| `execute` | `allow_execute` on the request | Running the generated tests |
+
+Both default to zero, so their tools are absent from the catalog rather than
+offered and refused — the same rule the corpus tools already follow. A build
+produces a scaffold you read yourself unless you ask for execution, and no
+retrieval run and no MCP client can reach either.
+
+When tests do run, the sandbox:
+
+- **hands over almost no environment** — an allowlist of six variables, so
+  nothing model-written is given `GROQ_API_KEY` or anything else from `.env`;
+- **runs from inside the project with `PYTHONPATH` unset**, so generated code
+  cannot `import pipeline` and reach the corpus, LanceDB or Kuzu;
+- **confines every path**, resolving before checking so a symlink pointing out
+  is refused alongside `..` and absolutes;
+- **bounds CPU, memory and wall clock**, because an infinite loop is one of the
+  more common things a model writes by accident.
+
+**This is a subprocess with limits, not a container.** It reduces the blast
+radius; it does not isolate. `pipeline/agents/tools/sandbox.py` is written so
+that swapping in Docker touches that one file.
+
 ## MCP: using the corpus from Claude Desktop or Claude Code
 
 The same tools the internal agent loop uses are exposed over the Model Context
@@ -1126,8 +1300,12 @@ pipeline/
   index/        preprocess -> chunk -> embed -> store, as one call
   retrieve/     query understanding, hybrid search, fusion, reranking
   graph/        GLiNER entities, relations, direction checks, Kuzu, cache
+  skills/       SKILL.md loading, intent matching, synthesis, the composed role
+  agents/       the loop, the supervisor, the builder, tools, the sandbox
   runner.py     the pipeline itself
-tests/          262 offline tests; one marked `slow` loads the real model
+skills/         one folder per domain: health, ecommerce, insurance, school
+workspace/      generated projects (gitignored)
+tests/          offline tests; those marked `slow` load a real model
 ```
 
 ## Notes and limitations

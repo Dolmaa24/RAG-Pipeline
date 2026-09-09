@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from celery.result import AsyncResult
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from celery_app import celery_app
 from config import config
@@ -66,8 +66,20 @@ class ExtractionRequest(BaseModel):
     url: str = Field(..., min_length=1, description="Any http(s) URL.")
     prompt: str = Field(..., min_length=1, description="What to extract, in plain language.")
     schema_template: dict = Field(
-        ...,
-        description='Field names to types, e.g. {"title": "string", "tags": "list of strings"}.',
+        default_factory=dict,
+        description=(
+            'Field names to types, e.g. {"title": "string", "tags": "list of '
+            'strings"}. Optional only when "skill" is given, which supplies its '
+            "domain's own fields."
+        ),
+    )
+    skill: Optional[str] = Field(
+        None,
+        description=(
+            "A domain pack from skills/. Fills schema_template with that "
+            "domain's fields when you do not supply one, and tells the graph "
+            "extractor which entity and relation types this domain uses."
+        ),
     )
     force_dynamic: bool = Field(False, description="Skip the static fetch, render with a browser.")
     local_only: bool = Field(
@@ -127,12 +139,35 @@ class ExtractionRequest(BaseModel):
             raise ValueError("upload reference is malformed; use the url /api/v1/upload returned")
         return value
 
-    @field_validator("schema_template")
-    @classmethod
-    def _non_empty_schema(cls, value: dict) -> dict:
-        if not value:
-            raise ValueError("schema_template must name at least one field")
-        return value
+    @model_validator(mode="after")
+    def _schema_or_skill(self) -> "ExtractionRequest":
+        """A schema, or a skill that has one. Never neither.
+
+        The skill fills the schema here rather than in the worker so that a
+        skill naming no extraction fields is refused at the request, where the
+        caller can read why, instead of producing an empty extraction an hour
+        into a crawl.
+        """
+        if self.schema_template:
+            return self
+        if not self.skill:
+            raise ValueError(
+                "schema_template must name at least one field, or name a skill "
+                "whose own fields should be used"
+            )
+        from pipeline.skills import get as get_skill
+
+        try:
+            skill = get_skill(self.skill)
+        except Exception as exc:
+            raise ValueError(str(exc)) from exc
+        if not skill.schema_hint:
+            raise ValueError(
+                f"the {self.skill!r} skill defines no extraction fields, so "
+                "schema_template is still required"
+            )
+        object.__setattr__(self, "schema_template", dict(skill.schema_hint))
+        return self
 
 
 class SearchRequest(BaseModel):
@@ -207,6 +242,71 @@ class InvestigateRequest(BaseModel):
         ),
     )
     local_only: bool = Field(False, description="Never send anything to a hosted model.")
+
+
+class TaskRequest(BaseModel):
+    """An intent in plain language, and what the run is allowed to do about it."""
+
+    intent: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "What you want done, in plain language. The domain is inferred from "
+            "it — 'which policies cover physiotherapy' routes to the insurance "
+            "skill without being told to."
+        ),
+    )
+    skill: Optional[str] = Field(
+        None,
+        description=(
+            "Name a skill outright and skip the routing, for when the match was "
+            "wrong. An unknown name is refused rather than silently ignored."
+        ),
+    )
+    allow_network: bool = Field(False, description="Let the run reach the outside world.")
+    allow_write: bool = Field(False, description="Let the run add what it fetched to the corpus.")
+    max_rounds: Optional[int] = Field(None, ge=1, le=5)
+    verify: Optional[bool] = Field(None)
+    local_only: bool = Field(False, description="Never send anything to a hosted model.")
+
+
+class DraftRequest(BaseModel):
+    """An intent no skill covers, and a request to describe the domain."""
+
+    intent: str = Field(
+        ..., min_length=1,
+        description="What you want done, in plain language, e.g. 'make a Baristo system'.",
+    )
+    local_only: bool = Field(False, description="Never send the intent to a hosted model.")
+
+
+class ApproveRequest(BaseModel):
+    """A reviewed draft, on its way to becoming a real skill."""
+
+    text: Optional[str] = Field(
+        None,
+        description=(
+            "The reviewed file. Send it back edited, or omit it to install the "
+            "draft as written. Validated either way."
+        ),
+    )
+
+
+class BuildRequest(BaseModel):
+    """A skill with a roster, and permission to write — or also to run."""
+
+    skill: Optional[str] = Field(None, description="The skill to build. Omit to match on intent.")
+    intent: str = Field(
+        "", description="What to build, in plain language. Also used to match a skill."
+    )
+    allow_execute: bool = Field(
+        False,
+        description=(
+            "Run the generated tests. Off by default: writing source and "
+            "executing it are separate permissions, and a scaffold you read "
+            "yourself needs only the first."
+        ),
+    )
 
 
 class BatchRequest(BaseModel):
@@ -419,6 +519,7 @@ def extract(request: ExtractionRequest) -> dict:
                 index=request.index,
                 build_graph=request.build_graph,
                 metadata=request.metadata,
+                skill=request.skill,
                 **kwargs,
             )
     except Exception as exc:
@@ -428,10 +529,17 @@ def extract(request: ExtractionRequest) -> dict:
             503, f"could not reach the task broker. Is Redis running? ({exc})"
         ) from exc
 
-    log.info("api.queued", url=request.url, task_id=task.id, acquisition=decision.acquisition)
+    log.info(
+        "api.queued",
+        url=request.url,
+        task_id=task.id,
+        acquisition=decision.acquisition,
+        skill=request.skill,
+    )
     return {
         "status": "queued",
         "task_id": task.id,
+        "skill": request.skill,
         "acquisition": decision.acquisition,
         "queue": config.CPU_QUEUE if decision.acquisition != Acquisition.HTTP else config.IO_QUEUE,
         "poll": f"/api/v1/tasks/{task.id}",
@@ -820,6 +928,256 @@ def route_preview(
         "question": question,
         "path": decision.path,
         "reason": decision.reason,
+    }
+
+
+@app.get("/api/v1/skills", tags=["skills"])
+def list_skills() -> dict:
+    """The domain packs loaded from skills/, and what each one can do."""
+    from pipeline.skills import load_all
+
+    skills = load_all()
+    return {
+        "enabled": config.SKILLS_ENABLED,
+        "count": len(skills),
+        "skills": [skill.to_dict() for skill in skills.values()],
+    }
+
+
+@app.get("/api/v1/skills/match", tags=["skills"])
+def match_skill(
+    intent: str = Query(..., min_length=1, description="What you want done, in plain language.")
+) -> dict:
+    """Which skill an intent would use, without running anything.
+
+    No model call, no queue, no side effect — the routing is trigger words and
+    a vector comparison, so this answers in milliseconds and is the honest way
+    to find out why a task chose the skill it did.
+    """
+    from pipeline.skills import match as match_intent
+
+    return {"intent": intent, **match_intent(intent).to_dict()}
+
+
+@app.post("/api/v1/skills/draft", tags=["skills"])
+def draft_skill(request: DraftRequest) -> dict:
+    """Describe a domain nothing covers yet, as a skill for you to review.
+
+    Answered inline rather than queued: it is one model call, and a draft you
+    have to poll for is a draft you will not read.
+
+    The result is written to the drafts folder, which the loader ignores. It
+    becomes a real skill only when you approve it — the body of a skill file is
+    an agent's system prompt, and installing a model's proposal unread would
+    hand it authorship of its own instructions.
+    """
+    from pipeline.skills import SkillError
+    from pipeline.skills import synth
+
+    try:
+        drafted = synth.draft(request.intent, local_only=request.local_only)
+        path = synth.save_draft(drafted)
+        skill, text = drafted.skill, drafted.text
+    except SkillError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        log.warning("api.draft_failed", intent=request.intent[:80], error=repr(exc))
+        raise HTTPException(503, f"could not draft a skill ({exc})") from exc
+
+    log.info("api.drafted", name=skill.name, intent=request.intent[:80])
+    return {
+        "status": "drafted",
+        "name": skill.name,
+        "skill": skill.to_dict(),
+        "text": text,
+        "path": str(path),
+        "approve": f"/api/v1/skills/drafts/{skill.name}/approve",
+        "note": (
+            "Read the body before approving — it becomes the agent's system "
+            "prompt. Nothing is live until you approve it."
+        ),
+    }
+
+
+@app.get("/api/v1/skills/drafts", tags=["skills"])
+def list_skill_drafts() -> dict:
+    from pipeline.skills import synth
+
+    return {"drafts": synth.list_drafts()}
+
+
+@app.get("/api/v1/skills/drafts/{name}", tags=["skills"])
+def read_skill_draft(name: str) -> dict:
+    from pipeline.skills import SkillError, synth
+
+    try:
+        return {"name": name, "text": synth.read_draft(name)}
+    except SkillError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/v1/skills/drafts/{name}/approve", tags=["skills"])
+def approve_skill_draft(name: str, request: ApproveRequest) -> dict:
+    """Install a reviewed draft. This is the human gate, and the only one."""
+    from pipeline.skills import SkillError, synth
+
+    try:
+        path = synth.approve(name, text=request.text)
+    except SkillError as exc:
+        # A draft that no longer parses, a name already taken, or one that was
+        # never there. All the caller's to fix, none of them a server fault.
+        raise HTTPException(400, str(exc)) from exc
+
+    log.info("api.skill_approved", name=name)
+    return {"status": "approved", "name": name, "path": str(path)}
+
+
+@app.delete("/api/v1/skills/drafts/{name}", tags=["skills"])
+def discard_skill_draft(name: str) -> dict:
+    from pipeline.skills import SkillError, synth
+
+    try:
+        synth.discard(name)
+    except SkillError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"status": "discarded", "name": name}
+
+
+@app.post("/api/v1/build", tags=["build"], status_code=202)
+def start_build(request: BuildRequest) -> dict:
+    """Queue a build: the skill's roster writes a project into the sandbox.
+
+    Queued, and on its own queue. A build is several whole-file generations and
+    runs for minutes, which is longer than an HTTP worker should be held and
+    longer than an investigation should wait behind.
+    """
+    from pipeline.skills import SkillError, match as match_intent
+    from tasks import build_project
+
+    if not config.BUILD_ENABLED:
+        raise HTTPException(
+            403,
+            "building is off. It writes files and, when allowed, runs them — "
+            "set BUILD_ENABLED to turn it on.",
+        )
+
+    try:
+        matched = match_intent(request.intent, skill=request.skill)
+    except SkillError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if matched.skill is None:
+        raise HTTPException(
+            400,
+            "no skill matched this intent. Draft one at /api/v1/skills/draft, "
+            "approve it, then build.",
+        )
+    if not matched.skill.buildable:
+        raise HTTPException(
+            400,
+            f"the {matched.skill.name!r} skill declares no agents, so there is "
+            "nothing to build. Add an 'agents:' block to its SKILL.md.",
+        )
+
+    try:
+        task = build_project.delay(
+            matched.skill.name,
+            intent=request.intent or matched.skill.description,
+            allow_execute=request.allow_execute,
+        )
+    except Exception as exc:
+        raise HTTPException(503, f"could not reach the task broker ({exc})") from exc
+
+    log.info(
+        "api.build",
+        skill=matched.skill.name,
+        execute=request.allow_execute,
+        intent=request.intent[:80],
+    )
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "skill": matched.skill.name,
+        "agents": [agent.to_dict() for agent in matched.skill.agents],
+        "will_run_tests": request.allow_execute,
+        "poll": f"/api/v1/builds/{task.id}",
+    }
+
+
+@app.get("/api/v1/builds/{task_id}", tags=["build"])
+def build_status(task_id: str) -> dict:
+    """Which worker is writing now, then the files, the trace and the tests."""
+    result = AsyncResult(task_id, app=celery_app)
+    status = result.status
+    response: dict[str, Any] = {"task_id": task_id, "status": status, "done": False}
+
+    if status == "PROGRESS":
+        response["progress"] = result.info if isinstance(result.info, dict) else {}
+        return response
+    if not result.ready():
+        return response
+
+    response["done"] = True
+    if result.successful():
+        response["result"] = result.result
+    else:
+        response["error"] = str(result.result)
+    return response
+
+
+@app.post("/api/v1/task", tags=["skills"], status_code=202)
+def run_task(request: TaskRequest) -> dict:
+    """Match an intent to a skill, compose that specialist, and queue the run.
+
+    The matching happens here rather than in the worker so the caller learns
+    which skill was chosen in the same response that hands them the task id —
+    a routing decision they cannot see is one they cannot correct, and
+    ``skill`` on this request is how they correct it.
+
+    The result is an ordinary investigation, so it polls at the endpoint
+    investigations already use.
+    """
+    from pipeline.skills import SkillError, match as match_intent
+    from tasks import investigate
+
+    try:
+        matched = match_intent(request.intent, skill=request.skill)
+    except SkillError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
+        task = investigate.delay(
+            request.intent,
+            allow_network=request.allow_network,
+            allow_write=request.allow_write,
+            max_rounds=request.max_rounds,
+            verify=request.verify,
+            local_only=request.local_only,
+            skill=matched.skill.name if matched.skill else None,
+        )
+    except Exception as exc:
+        raise HTTPException(503, f"could not reach the task broker ({exc})") from exc
+
+    log.info(
+        "api.task",
+        intent=request.intent[:80],
+        skill=matched.skill.name if matched.skill else None,
+        how=matched.how,
+    )
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "intent": request.intent,
+        "matched": matched.to_dict(),
+        "agent": {
+            "role": matched.skill.name if matched.skill else "corpus",
+            "tools": list(matched.skill.tools) if matched.skill else None,
+        },
+        # Said here rather than left for the caller to know: an unmatched intent
+        # is the one case where there is something useful to do next, and the
+        # generic specialist answering badly does not suggest it.
+        "can_draft_skill": matched.skill is None,
+        "poll": f"/api/v1/investigations/{task.id}",
     }
 
 

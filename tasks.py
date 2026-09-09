@@ -111,6 +111,7 @@ def _enqueue_index(
     enabled: Optional[bool],
     graph: Optional[bool] = None,
     supplied_metadata: Optional[dict] = None,
+    skill: Optional[str] = None,
 ) -> Optional[str]:
     """Hand the finished text to the cpu queue for chunking and embedding.
 
@@ -151,6 +152,7 @@ def _enqueue_index(
             source=item.canonical_url or item.url,
             metadata=metadata,
             build_graph=graph,
+            skill=skill,
         )
     except Exception as exc:
         log.warning("task.index_enqueue_failed", url=item.url, error=repr(exc))
@@ -175,6 +177,7 @@ def extract_url(
     index: Optional[bool] = None,
     build_graph: Optional[bool] = None,
     metadata: Optional[dict] = None,
+    skill: Optional[str] = None,
 ) -> dict:
     """Extract structured data from any URL: page, document, feed, archive, media.
 
@@ -215,7 +218,11 @@ def extract_url(
             result = _result(report, item)
 
             index_task_id = _enqueue_index(
-                item, enabled=index, graph=build_graph, supplied_metadata=metadata
+                item,
+                enabled=index,
+                graph=build_graph,
+                supplied_metadata=metadata,
+                skill=skill,
             )
             if index_task_id:
                 item.metadata["index_task_id"] = index_task_id
@@ -555,6 +562,7 @@ def index_document(
     strategy: Optional[str] = None,
     local_only: bool = False,
     build_graph: Optional[bool] = None,
+    skill: Optional[str] = None,
 ) -> dict:
     """Chunk, embed and store one document's text.
 
@@ -576,7 +584,9 @@ def index_document(
             payload = report.to_dict()
 
             if config.GRAPH_ENABLED if build_graph is None else build_graph:
-                payload["graph"] = _build_graph(text, source, metadata, local_only)
+                payload["graph"] = _build_graph(
+                    text, source, metadata, local_only, skill
+                )
             return payload
         except SoftTimeLimitExceeded:
             log.error("task.soft_timeout", url=source, task="index_document")
@@ -628,7 +638,11 @@ def search(
 
 
 def _build_graph(
-    text: str, source: str, metadata: Optional[dict], local_only: bool
+    text: str,
+    source: str,
+    metadata: Optional[dict],
+    local_only: bool,
+    skill: Optional[str] = None,
 ) -> dict:
     """Fold this document into the knowledge graph.
 
@@ -645,12 +659,70 @@ def _build_graph(
             source_url=source,
             content_hash=str((metadata or {}).get("content_hash", "")),
             local_only=local_only,
+            skill=skill,
             database=db,
         )
         return report.to_dict()
     except Exception as exc:
         log.warning("task.graph_failed", source=source[:80], error=repr(exc))
         return {"error": repr(exc)}
+
+
+@celery_app.task(bind=True, name="tasks.build_project")
+def build_project(
+    self,
+    skill: str,
+    *,
+    intent: str = "",
+    allow_execute: bool = False,
+) -> dict:
+    """Run a skill's roster over a sandboxed project directory.
+
+    No ``RETRY_KWARGS``, for the same reason an investigation has none, and one
+    more: a retry would run the workers again over files the first attempt
+    already wrote, and a half-finished build re-entered is harder to read than
+    a failed one.
+
+    ``allow_execute`` is the second gate. Writing source and running it are
+    separate effects, so a build that produces a scaffold for a person to read
+    is the default and executing it is asked for.
+    """
+    with job_context(self.request.id, f"build {skill}"):
+        from pipeline.agents.budget import Budget
+        from pipeline.agents.builder import Builder
+        from pipeline.skills import get as get_skill
+
+        try:
+            chosen = get_skill(skill)
+        except Exception as exc:
+            log.warning("task.build_unknown_skill", skill=skill, error=repr(exc))
+            return {"skill": skill, "stopped": str(exc), "files": [], "steps": []}
+
+        base = Budget.from_config()
+        budget = Budget(
+            max_iterations=base.max_iterations,
+            max_tool_calls=base.max_tool_calls,
+            # A build is many model calls writing whole files, so the
+            # ninety seconds an investigation gets is not the right ceiling.
+            max_seconds=base.max_seconds * 6,
+            max_tokens=base.max_tokens,
+            code_calls=config.BUILD_CODE_CALLS,
+            execute_calls=config.BUILD_EXECUTE_CALLS if allow_execute else 0,
+        )
+
+        def report(event: dict) -> None:
+            self.update_state(state="PROGRESS", meta=event)
+
+        try:
+            result = Builder(
+                chosen, intent=intent, budget=budget, on_progress=report
+            ).build()
+            return result.to_dict()
+        except SoftTimeLimitExceeded:
+            log.error("task.soft_timeout", skill=skill, task="build_project")
+            raise
+        finally:
+            gc.collect()
 
 
 @celery_app.task(bind=True, name="tasks.investigate")
@@ -663,6 +735,7 @@ def investigate(
     max_rounds: Optional[int] = None,
     verify: Optional[bool] = None,
     local_only: bool = False,
+    skill: Optional[str] = None,
 ) -> dict:
     """Answer one question with the agent loop, and report the reasoning.
 
@@ -673,6 +746,12 @@ def investigate(
     ``allow_network`` and ``allow_write`` become the budget's counters, which
     are also its permission gate — an unbudgeted effect is not merely capped,
     its tools are absent from what the model is shown.
+
+    ``skill`` names a domain pack to run as the gathering specialist. A name
+    rather than the composed role: the worker reads the same folder the API
+    read, so nothing skill-shaped crosses the broker and an edited skill file
+    does not have to match a queued job. An unknown name falls back to the
+    generic specialist — a queued job should not be lost to a renamed file.
     """
     with job_context(self.request.id, question[:80]):
         from pipeline.agents.budget import Budget
@@ -691,15 +770,27 @@ def investigate(
         def report(event: dict) -> None:
             self.update_state(state="PROGRESS", meta=event)
 
+        role = None
+        if skill:
+            try:
+                from pipeline.skills import get as get_skill
+
+                role = get_skill(skill).as_role()
+            except Exception as exc:
+                log.warning("task.skill_unavailable", skill=skill, error=repr(exc))
+
         try:
             result = Supervisor(
                 budget=budget,
                 local_only=local_only,
                 max_rounds=max_rounds,
                 verify_answer=verify,
+                role=role,
                 on_progress=report,
             ).investigate(question)
-            return result.to_dict()
+            payload = result.to_dict()
+            payload["skill"] = role.name if role else None
+            return payload
         except SoftTimeLimitExceeded:
             log.error("task.soft_timeout", task="tasks.investigate")
             raise

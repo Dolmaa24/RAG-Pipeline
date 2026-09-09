@@ -51,6 +51,93 @@ def api_post(path: str, payload: dict, timeout: int = 120):
         st.error(f"API unreachable at {API} ({exc})")
         return None
 
+def api_delete(path: str, timeout: int = 30):
+    try:
+        response = requests.delete(f"{API}{path}", timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except requests.HTTPError as exc:
+        st.error(api_detail(exc))
+        return None
+    except requests.RequestException as exc:
+        st.error(f"API unreachable at {API} ({exc})")
+        return None
+
+
+def poll_build(task_id: str, status_box) -> dict | None:
+    """Watch a build. Longer-running than an investigation and noisier, so the
+    progress line names the worker rather than only the stage."""
+    began = time.time()
+    while time.time() - began < POLL_TIMEOUT:
+        state = api_get(f"/api/v1/builds/{task_id}")
+        if state is None:
+            return None
+        if state.get("done"):
+            if state.get("error"):
+                st.error(state["error"])
+            return state.get("result")
+
+        step = state.get("progress") or {}
+        stage = step.get("stage", state.get("status", "queued"))
+        worker = step.get("worker", "")
+        position = (
+            f" ({step['index']} of {step['of']})"
+            if step.get("index") and step.get("of")
+            else ""
+        )
+        status_box.info(
+            f"{stage}"
+            + (f" · {worker}{position}" if worker else "")
+            + f" · {int(time.time() - began)}s"
+        )
+        time.sleep(POLL_INTERVAL)
+    return None
+
+
+def render_build(payload: dict) -> None:
+    """One finished build: what each worker wrote, and whether it runs."""
+    files = payload.get("files") or []
+    if not files:
+        st.error(payload.get("stopped") or "Nothing was written.")
+    else:
+        st.success(f"{len(files)} file(s) in {payload.get('project', 'the workspace')}")
+
+    tests = payload.get("tests")
+    if tests is None:
+        st.info(
+            "The generated code was not run. Tick *Run the generated tests* to "
+            "execute it — that is a separate permission from writing it."
+        )
+    elif tests.get("timed_out"):
+        st.warning("The tests were killed for running too long.")
+    elif tests.get("ok"):
+        st.success(f"Tests passed in {tests.get('seconds', 0)}s.")
+    else:
+        st.warning(f"Tests failed (exit {tests.get('exit_code')}).")
+
+    st.markdown("#### What each worker wrote")
+    for step in payload.get("steps") or []:
+        wrote = ", ".join(step.get("files") or []) or "nothing"
+        line = f"**{step['name']}** — {wrote}"
+        if step.get("note"):
+            line += f"  \n<span style='color:#c60'>{step['note']}</span>"
+        if step.get("purpose"):
+            line += f"  \n<span style='color:#888'>{step['purpose']}</span>"
+        st.markdown(line, unsafe_allow_html=True)
+
+    if tests and tests.get("output"):
+        st.markdown("#### Test output")
+        st.code(tests["output"][:4000], language="text")
+
+    if files:
+        st.markdown("#### Files")
+        for name in files:
+            st.markdown(f"`{name}`")
+
+    for warning in payload.get("warnings") or []:
+        st.caption(f"warning: {warning}")
+
+
 # Sidebar
 with st.sidebar:
     st.header("System")
@@ -147,8 +234,124 @@ with st.sidebar:
                         st.success(f"Removed {gone} passage(s).")
                         st.rerun()
 
+
+def poll_investigation(task_id: str, status_box) -> dict | None:
+    """Watch one queued investigation until it finishes or the wait runs out.
+
+    Shared by the Investigate and Task tabs. Both queue the same task and poll
+    the same endpoint, and a progress display that drifts between two tabs is a
+    display nobody trusts.
+    """
+    began = time.time()
+    while time.time() - began < POLL_TIMEOUT:
+        state = api_get(f"/api/v1/investigations/{task_id}")
+        if state is None:
+            return None
+        if state.get("done"):
+            if state.get("error"):
+                st.error(state["error"])
+            return state.get("result")
+
+        step = state.get("progress") or {}
+        stage = step.get("stage", state.get("status", "queued"))
+        detail = step.get("role") or step.get("tools") or ""
+        status_box.info(
+            f"{stage}"
+            + (f" · round {step['round']}" if step.get("round") else "")
+            + (f" · {detail}" if detail else "")
+            + f" · {int(time.time() - began)}s"
+        )
+        time.sleep(POLL_INTERVAL)
+    return None
+
+
+def render_investigation(payload: dict) -> None:
+    """One finished investigation: the answer, what was checked, and the trace."""
+
+    if payload.get("sufficient"):
+        st.success("Answered from the corpus.")
+    else:
+        st.warning(
+            "The corpus did not fully cover this. The answer below is "
+            "what could be supported; treat the rest as unverified."
+        )
+
+    st.markdown(payload.get("answer") or "_No answer was produced._")
+
+    check = payload.get("verification") or {}
+    if check.get("skipped"):
+        st.caption(f"Not checked: {check.get('reason', 'unknown')}")
+    elif check:
+        flagged = len(check.get("unsupported") or [])
+        if flagged:
+            st.caption(
+                f"{flagged} of {check['checked']} claims are marked "
+                "[unsupported] — the cited passages did not clearly "
+                "carry them."
+            )
+            # The rate is stated with the flags, not buried in docs. A
+            # reader who finds one correct sentence in two marked stops
+            # reading the marks, which costs the real catches their
+            # value.
+            if check.get("caveat"):
+                st.caption(f":grey[{check['caveat']}]")
+        else:
+            st.caption(
+                f"All {check['checked']} sentences are supported by the "
+                "passages cited."
+            )
+
+    a, b, c, d = st.columns(4)
+    a.metric("Rounds", payload.get("rounds", 0))
+    b.metric("Sources", len(payload.get("sources") or []))
+    c.metric("Seconds", payload.get("seconds", 0))
+    d.metric("Ended", payload.get("stopped", ""))
+
+    # Shown, not hidden behind an expander. For a system whose selling
+    # point is the reasoning, the reasoning is the interesting part of
+    # the screen.
+    st.markdown("#### What it did")
+    for step in payload.get("trace") or []:
+        if step.get("kind") == "specialist":
+            tools = ", ".join(step.get("tools") or []) or "no tools"
+            st.markdown(
+                f"**{step['role']}** — {tools}  \n"
+                f"<span style='color:#888'>ended: {step.get('stopped','')}</span>",
+                unsafe_allow_html=True,
+            )
+            for inner in step.get("steps") or []:
+                if inner.get("kind") == "tool":
+                    ok = "ok" if inner.get("ok") else "failed"
+                    st.code(
+                        f"{inner['tool']}({json.dumps(inner.get('arguments', {}))})"
+                        f"  -> {ok}, {inner.get('duration_ms', 0):.0f}ms\n"
+                        f"{(inner.get('observation') or '')[:400]}",
+                        language="text",
+                    )
+        else:
+            st.markdown(
+                f"**synthesis** — {step.get('sources', 0)} sources, "
+                f"sufficient: {step.get('sufficient')}, "
+                f"{step.get('seconds', 0)}s"
+            )
+
+    if payload.get("sources"):
+        st.markdown("#### Sources")
+        for source in payload["sources"]:
+            st.markdown(
+                f"**[{source.get('number')}]** `{source.get('origin', '')}`"
+            )
+            st.caption((source.get("text") or "")[:300])
+
+    if payload.get("warnings"):
+        for warning in payload["warnings"]:
+            st.caption(f"warning: {warning}")
+
+
 # Main Interface
-extract_tab, search_tab, investigate_tab = st.tabs(["Extract", "Search", "Investigate"])
+extract_tab, search_tab, investigate_tab, task_tab, build_tab = st.tabs(
+    ["Extract", "Search", "Investigate", "Task", "Build"]
+)
 
 with extract_tab:
     left, right = st.columns([1, 1])
@@ -645,108 +848,216 @@ with investigate_tab:
             st.stop()
 
         status_box = st.empty()
-        began = time.time()
-        payload = None
-
-        while time.time() - began < POLL_TIMEOUT:
-            state = api_get(f"/api/v1/investigations/{queued['task_id']}")
-            if state is None:
-                break
-            if state.get("done"):
-                payload = state.get("result")
-                if state.get("error"):
-                    st.error(state["error"])
-                break
-
-            step = state.get("progress") or {}
-            stage = step.get("stage", state.get("status", "queued"))
-            detail = step.get("role") or step.get("tools") or ""
-            status_box.info(
-                f"{stage}"
-                + (f" · round {step['round']}" if step.get("round") else "")
-                + (f" · {detail}" if detail else "")
-                + f" · {int(time.time() - began)}s"
-            )
-            time.sleep(POLL_INTERVAL)
+        payload = poll_investigation(queued["task_id"], status_box)
 
         if payload:
             status_box.empty()
+            render_investigation(payload)
 
-            if payload.get("sufficient"):
-                st.success("Answered from the corpus.")
+
+with task_tab:
+    st.subheader("Task")
+    st.caption(
+        "Say what you want done. The domain is worked out from the words — "
+        "no model call — and the matching skill supplies the specialist's "
+        "prompt and its tools."
+    )
+
+    intent = st.text_input(
+        "Intent", "",
+        placeholder="Which policies cover physiotherapy?",
+        key="task_intent", label_visibility="collapsed",
+    )
+
+    catalogue = api_get("/api/v1/skills") or {}
+    names = [skill["name"] for skill in catalogue.get("skills", [])]
+
+    if not names:
+        st.info(
+            "No skills are loaded. Each one is a folder under `skills/` "
+            "holding a `SKILL.md`."
+        )
+
+    chosen = st.selectbox(
+        "Skill",
+        ["(work it out from the intent)", *names],
+        help="Override the routing when the match is wrong.",
+    )
+    override = None if chosen.startswith("(") else chosen
+
+    # The routing shown before the run, not after. A decision the operator
+    # cannot see is one they cannot correct, and correcting it is what the
+    # selectbox above is for.
+    if intent.strip() and override is None:
+        preview = api_get("/api/v1/skills/match", intent=intent)
+        if preview:
+            if preview.get("skill"):
+                st.info(
+                    f"**{preview['skill']}** — {preview['why']} "
+                    f"(confidence {preview['confidence']})"
+                )
             else:
-                st.warning(
-                    "The corpus did not fully cover this. The answer below is "
-                    "what could be supported; treat the rest as unverified."
+                st.caption(
+                    "No skill matched, so the generic corpus specialist will "
+                    "run — which is what every question got before skills "
+                    "existed. Naming one above is how you force a domain."
+                )
+                # Offered here because here is where the gap shows up. The
+                # draft is written to a folder the loader ignores; approving
+                # it in the Build tab is what makes it real.
+                if st.button("Draft a skill for this", key="draft_skill"):
+                    drafted = api_post(
+                        "/api/v1/skills/draft", {"intent": intent}, timeout=180
+                    )
+                    if drafted:
+                        st.success(
+                            f"Drafted **{drafted['name']}**. Nothing is live yet — "
+                            "read it in the Build tab and approve it there."
+                        )
+                        st.code(drafted["text"], language="markdown")
+            runners = preview.get("runners_up") or []
+            if runners:
+                st.caption(
+                    "also considered: "
+                    + ", ".join(f"{r['skill']} ({r['score']})" for r in runners)
                 )
 
-            st.markdown(payload.get("answer") or "_No answer was produced._")
+    with st.expander("What it may do", expanded=False):
+        task_rounds = st.slider("Rounds", 1, 5, 2, key="task_rounds")
+        task_verify = st.checkbox(
+            "Check the answer against its sources", value=True, key="task_verify"
+        )
+        task_network = st.checkbox(
+            "May fetch a URL in the intent", value=False, key="task_network"
+        )
+        task_write = st.checkbox(
+            "May add what it fetched to the corpus", value=False, key="task_write",
+            help="A skill cannot grant this. It is granted here or not at all.",
+        )
 
-            check = payload.get("verification") or {}
-            if check.get("skipped"):
-                st.caption(f"Not checked: {check.get('reason', 'unknown')}")
-            elif check:
-                flagged = len(check.get("unsupported") or [])
-                if flagged:
-                    st.caption(
-                        f"{flagged} of {check['checked']} claims are marked "
-                        "[unsupported] — the cited passages did not clearly "
-                        "carry them."
-                    )
-                    # The rate is stated with the flags, not buried in docs. A
-                    # reader who finds one correct sentence in two marked stops
-                    # reading the marks, which costs the real catches their
-                    # value.
-                    if check.get("caveat"):
-                        st.caption(f":grey[{check['caveat']}]")
-                else:
-                    st.caption(
-                        f"All {check['checked']} sentences are supported by the "
-                        "passages cited."
-                    )
+    if st.button("Run", type="primary", use_container_width=True, key="go_task"):
+        if not intent.strip():
+            st.warning("Say what you want done first.")
+            st.stop()
 
-            a, b, c, d = st.columns(4)
-            a.metric("Rounds", payload.get("rounds", 0))
-            b.metric("Sources", len(payload.get("sources") or []))
-            c.metric("Seconds", payload.get("seconds", 0))
-            d.metric("Ended", payload.get("stopped", ""))
+        queued = api_post(
+            "/api/v1/task",
+            {
+                "intent": intent,
+                "skill": override,
+                "allow_network": bool(task_network),
+                "allow_write": bool(task_write),
+                "max_rounds": int(task_rounds),
+                "verify": bool(task_verify),
+            },
+            timeout=20,
+        )
+        if queued is None:
+            st.stop()
 
-            # Shown, not hidden behind an expander. For a system whose selling
-            # point is the reasoning, the reasoning is the interesting part of
-            # the screen.
-            st.markdown("#### What it did")
-            for step in payload.get("trace") or []:
-                if step.get("kind") == "specialist":
-                    tools = ", ".join(step.get("tools") or []) or "no tools"
-                    st.markdown(
-                        f"**{step['role']}** — {tools}  \n"
-                        f"<span style='color:#888'>ended: {step.get('stopped','')}</span>",
-                        unsafe_allow_html=True,
-                    )
-                    for inner in step.get("steps") or []:
-                        if inner.get("kind") == "tool":
-                            ok = "ok" if inner.get("ok") else "failed"
-                            st.code(
-                                f"{inner['tool']}({json.dumps(inner.get('arguments', {}))})"
-                                f"  -> {ok}, {inner.get('duration_ms', 0):.0f}ms\n"
-                                f"{(inner.get('observation') or '')[:400]}",
-                                language="text",
-                            )
-                else:
-                    st.markdown(
-                        f"**synthesis** — {step.get('sources', 0)} sources, "
-                        f"sufficient: {step.get('sufficient')}, "
-                        f"{step.get('seconds', 0)}s"
-                    )
+        agent = queued.get("agent") or {}
+        st.markdown(
+            f"**Agent:** `{agent.get('role', 'corpus')}` — "
+            + (", ".join(agent.get("tools") or []) or "the default tools")
+        )
 
-            if payload.get("sources"):
-                st.markdown("#### Sources")
-                for source in payload["sources"]:
-                    st.markdown(
-                        f"**[{source.get('number')}]** `{source.get('origin', '')}`"
-                    )
-                    st.caption((source.get("text") or "")[:300])
+        status_box = st.empty()
+        payload = poll_investigation(queued["task_id"], status_box)
 
-            if payload.get("warnings"):
-                for warning in payload["warnings"]:
-                    st.caption(f"warning: {warning}")
+        if payload:
+            status_box.empty()
+            render_investigation(payload)
+
+
+with build_tab:
+    st.subheader("Build")
+    st.caption(
+        "A skill that declares a roster can be built: each worker writes its "
+        "part of a project into a sandbox. What comes out is a scaffold to "
+        "read, not a finished application."
+    )
+
+    drafts = (api_get("/api/v1/skills/drafts") or {}).get("drafts") or []
+    if drafts:
+        st.markdown("#### Drafts waiting to be read")
+        st.caption(
+            "The body of a skill file becomes an agent's system prompt. Read it "
+            "before approving — that review is the only thing between a model's "
+            "proposal and an agent's instructions."
+        )
+        which = st.selectbox("Draft", drafts, key="which_draft")
+        current = api_get(f"/api/v1/skills/drafts/{which}") or {}
+        edited = st.text_area(
+            "The file", current.get("text", ""), height=340, key="draft_text"
+        )
+        approve, discard = st.columns(2)
+        if approve.button("Approve and install", type="primary", use_container_width=True):
+            if api_post(f"/api/v1/skills/drafts/{which}/approve", {"text": edited}):
+                st.success(f"Installed {which}.")
+                st.rerun()
+        if discard.button("Discard", use_container_width=True):
+            if api_delete(f"/api/v1/skills/drafts/{which}"):
+                st.rerun()
+        st.divider()
+
+    catalogue = (api_get("/api/v1/skills") or {}).get("skills") or []
+    buildable = [skill for skill in catalogue if skill.get("buildable")]
+
+    if not buildable:
+        st.info(
+            "No installed skill declares a roster. A skill becomes buildable "
+            "when its SKILL.md has an `agents:` block — draft one from the Task "
+            "tab, or add the block to a skill by hand."
+        )
+    else:
+        chosen = st.selectbox(
+            "Skill", [skill["name"] for skill in buildable], key="build_skill"
+        )
+        skill = next(s for s in buildable if s["name"] == chosen)
+
+        st.markdown("**The roster**")
+        for agent in skill.get("agents") or []:
+            owns = ", ".join(agent.get("writes") or []) or "one module"
+            st.markdown(
+                f"- **{agent['name']}** — {agent['purpose']}  \n"
+                f"  <span style='color:#888'>writes {owns}</span>",
+                unsafe_allow_html=True,
+            )
+
+        what = st.text_input(
+            "What to build",
+            skill.get("description", ""),
+            key="build_intent",
+            help="Passed to every worker along with the shared contract.",
+        )
+        run_tests = st.checkbox(
+            "Run the generated tests",
+            value=False,
+            key="build_execute",
+            help=(
+                "Executes code a model wrote, in a subprocess with no secrets "
+                "in its environment and a hard timeout. That is mitigation, not "
+                "isolation — leave it off to get the files and read them first."
+            ),
+        )
+        if run_tests:
+            st.warning(
+                "This runs model-written code on this machine. The sandbox "
+                "drops the environment and bounds CPU, memory and wall clock, "
+                "but it is a subprocess, not a container."
+            )
+
+        if st.button("Build", type="primary", use_container_width=True, key="go_build"):
+            queued = api_post(
+                "/api/v1/build",
+                {"skill": chosen, "intent": what, "allow_execute": bool(run_tests)},
+                timeout=30,
+            )
+            if queued is None:
+                st.stop()
+
+            status_box = st.empty()
+            payload = poll_build(queued["task_id"], status_box)
+            if payload:
+                status_box.empty()
+                render_build(payload)
