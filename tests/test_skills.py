@@ -287,3 +287,28 @@ def test_every_shipped_skill_has_an_extraction_schema():
     for skill in loader.load_all(force=True).values():
         assert skill.schema_hint, skill.name
         assert skill.entity_types, skill.name
+
+
+def test_every_shipped_skill_declares_a_build_roster():
+    """Each of these is a domain with software in it — a clinic, a shop, an
+    insurer, a school. A skill that can answer questions about a domain and not
+    describe the parts it is built from is half a description of it, and the
+    Playground's agent panel has nothing to show for it."""
+    for skill in loader.load_all(force=True).values():
+        assert skill.buildable, skill.name
+        assert len(skill.agents) >= 3, skill.name
+
+
+def test_every_declared_agent_owns_a_file():
+    """A worker with no file is a worker with nothing to do."""
+    for skill in loader.load_all(force=True).values():
+        for agent in skill.agents:
+            assert agent.writes, f"{skill.name}/{agent.name}"
+            assert agent.purpose, f"{skill.name}/{agent.name}"
+
+
+def test_no_two_agents_in_a_skill_write_the_same_file():
+    """They run in order and the later one would silently replace the earlier."""
+    for skill in loader.load_all(force=True).values():
+        owned = [name for agent in skill.agents for name in agent.writes]
+        assert len(owned) == len(set(owned)), skill.name

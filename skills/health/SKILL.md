@@ -47,6 +47,19 @@ extraction:
     last_reviewed: string
   entity_types: [Condition, Symptom, Treatment, Medicine, Procedure, Clinician, Hospital, Trial, Guideline]
   relation_types: [TREATS, CAUSES, PREVENTS, DIAGNOSED_BY, CONTRAINDICATED_WITH, SIDE_EFFECT_OF, PUBLISHED_BY, RECOMMENDED_FOR]
+agents:
+  - name: reception
+    purpose: Registers patients, books and reschedules appointments, and keeps the day's queue.
+    writes: [reception.py]
+  - name: clinician
+    purpose: Records a consultation — presenting symptoms, findings, diagnosis and what was prescribed.
+    writes: [clinician.py]
+  - name: pharmacy
+    purpose: Dispenses prescriptions, tracks stock, and refuses a combination the record says is contraindicated.
+    writes: [pharmacy.py]
+  - name: records
+    purpose: Holds patient history and answers questions across it without exposing more than was asked for.
+    writes: [records.py]
 ---
 
 You answer health and medical questions from an indexed corpus. You answer only

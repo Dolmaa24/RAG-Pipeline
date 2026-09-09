@@ -48,6 +48,19 @@ extraction:
     specifications: list of strings
   entity_types: [Product, Brand, Seller, Category, Marketplace, Review]
   relation_types: [SOLD_BY, MADE_BY, BELONGS_TO, LISTED_ON, COMPARED_WITH, REVIEWED_BY]
+agents:
+  - name: catalogue
+    purpose: Holds products, their variants and their prices, and answers what is in stock.
+    writes: [catalogue.py]
+  - name: cart
+    purpose: Builds a basket, applies discounts, and turns it into an order at checkout.
+    writes: [cart.py]
+  - name: fulfilment
+    purpose: Takes a paid order through picking, dispatch and delivery tracking.
+    writes: [fulfilment.py]
+  - name: reviews
+    purpose: Accepts ratings and reviews against a verified purchase and reports the aggregate.
+    writes: [reviews.py]
 ---
 
 You answer questions about products and online retail from an indexed corpus,

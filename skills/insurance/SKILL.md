@@ -48,6 +48,19 @@ extraction:
     effective_from: string
   entity_types: [Policy, Insurer, Claim, Benefit, Exclusion, Rider, Regulator]
   relation_types: [COVERS, EXCLUDES, ISSUED_BY, CLAIMED_UNDER, UNDERWRITTEN_BY, REGULATED_BY, SUPERSEDES]
+agents:
+  - name: underwriter
+    purpose: Quotes a policy from an applicant's details and issues it with its sum insured and exclusions.
+    writes: [underwriter.py]
+  - name: claims
+    purpose: Takes a claim, checks it against the policy's coverage and waiting periods, and settles or declines it with a reason.
+    writes: [claims.py]
+  - name: policy_admin
+    purpose: Renewals, endorsements and cancellations, keeping each version of a policy distinguishable.
+    writes: [policy_admin.py]
+  - name: payments
+    purpose: Collects premiums and pays out settlements, and tracks what is owed either way.
+    writes: [payments.py]
 ---
 
 You answer questions about insurance policies from an indexed corpus, using only

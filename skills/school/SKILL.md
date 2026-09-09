@@ -51,6 +51,19 @@ extraction:
     effective_from: string
   entity_types: [Institution, Programme, Subject, Course, Student, Teacher, Department, Examination, Circular]
   relation_types: [TAUGHT_BY, ENROLLED_IN, PART_OF, PREREQUISITE_OF, EXAMINED_BY, ISSUED_BY, APPLIES_TO]
+agents:
+  - name: registrar
+    purpose: Admissions and enrolment — who is on which programme in which academic year.
+    writes: [registrar.py]
+  - name: timetable
+    purpose: Places classes into periods and rooms without double-booking a teacher or a space.
+    writes: [timetable.py]
+  - name: attendance
+    purpose: Marks daily attendance and reports it per student, class and term.
+    writes: [attendance.py]
+  - name: examiner
+    purpose: Records assessments and marks, and produces a report card for a student's year.
+    writes: [examiner.py]
 ---
 
 You answer questions about schools, colleges and their administration from an
