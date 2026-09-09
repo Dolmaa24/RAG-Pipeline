@@ -668,6 +668,40 @@ def _build_graph(
         return {"error": repr(exc)}
 
 
+@celery_app.task(bind=True, name="tasks.playground_reply")
+def playground_reply(
+    self,
+    thread_id: str,
+    question: str,
+    *,
+    local_only: bool = False,
+) -> dict:
+    """Answer the newest message in a thread, and store the reply.
+
+    No ``RETRY_KWARGS``, like the other agent tasks: a retry would spend the
+    same model calls again for the same reason, and here it would also append a
+    second assistant message to a conversation that already has one.
+
+    The user's message is already stored — the API writes it before queuing, so
+    it is visible the moment it is sent rather than when the agent finishes.
+    """
+    with job_context(self.request.id, f"thread {thread_id[:8]}"):
+        from playground import threads
+
+        def report(event: dict) -> None:
+            self.update_state(state="PROGRESS", meta=event)
+
+        try:
+            return threads.reply(
+                thread_id, question, local_only=local_only, on_progress=report
+            ).to_dict()
+        except SoftTimeLimitExceeded:
+            log.error("task.soft_timeout", thread=thread_id, task="playground_reply")
+            raise
+        finally:
+            gc.collect()
+
+
 @celery_app.task(bind=True, name="tasks.build_project")
 def build_project(
     self,

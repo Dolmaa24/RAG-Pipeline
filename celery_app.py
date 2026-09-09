@@ -100,6 +100,10 @@ celery_app.conf.update(
         # retrieval. On io it would starve page fetches; on cpu it would block
         # behind a transcription. Its own queue, on the threads pool.
         "tasks.investigate": {"queue": config.AGENTS_QUEUE},
+        # A playground turn is an investigation with history in front of it, so
+        # it belongs on the same queue for the same reason and competes with
+        # investigations rather than with page fetches.
+        "tasks.playground_reply": {"queue": config.AGENTS_QUEUE},
         # A build is longer still — several generations, then a test run — so
         # it does not share the agents queue with the investigations it would
         # otherwise sit in front of.

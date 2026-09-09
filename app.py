@@ -309,6 +309,28 @@ class BuildRequest(BaseModel):
     )
 
 
+class ThreadRequest(BaseModel):
+    """A new conversation, optionally with its first message."""
+
+    title: str = Field("", description="Optional. Otherwise taken from the first message.")
+    message: Optional[str] = Field(
+        None,
+        description=(
+            "An opening message. Given one, the thread is created and the "
+            "message posted in a single call — which is what typing into an "
+            "empty chat actually is."
+        ),
+    )
+    local_only: bool = Field(False, description="Never send this to a hosted model.")
+
+
+class ThreadMessageRequest(BaseModel):
+    """One turn in an existing conversation."""
+
+    content: str = Field(..., min_length=1, description="What to say, in plain language.")
+    local_only: bool = Field(False, description="Never send this to a hosted model.")
+
+
 class BatchRequest(BaseModel):
     urls: list[str] = Field(..., min_length=1, max_length=1000)
     prompt: str = Field(..., min_length=1)
@@ -929,6 +951,143 @@ def route_preview(
         "path": decision.path,
         "reason": decision.reason,
     }
+
+
+def _queue_reply(thread_id: str, content: str, local_only: bool) -> dict:
+    """Store the message, queue the work, and say which path it will take.
+
+    Stored first, deliberately. A message that appears only once the agent has
+    finished is one the user cannot see they sent, and a worker that then fails
+    would leave no trace it was ever asked.
+    """
+    from playground import threads
+    from tasks import playground_reply
+
+    stored = threads.start_turn(thread_id, content)
+    try:
+        task = playground_reply.delay(thread_id, content, local_only=local_only)
+    except Exception as exc:
+        raise HTTPException(503, f"could not reach the task broker ({exc})") from exc
+
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "thread_id": thread_id,
+        "message_id": stored.id,
+        # From route.py, with no model call, so the caller can say "thinking"
+        # or "this takes a minute" before anything comes back.
+        "path": threads.plan(content),
+        "poll": f"/api/v1/threads/{thread_id}/replies/{task.id}",
+    }
+
+
+@app.post("/api/v1/threads", tags=["playground"], status_code=201)
+def create_thread(request: ThreadRequest) -> dict:
+    """Start a conversation. With a message, it also takes the first turn."""
+    from playground import store
+
+    thread = store.create_thread(request.title or request.message or "")
+    payload: dict[str, Any] = {"thread": thread.to_dict()}
+
+    if request.message and request.message.strip():
+        payload.update(_queue_reply(thread.id, request.message, request.local_only))
+        payload["thread"] = store.get_thread(thread.id).to_dict()
+
+    log.info("api.thread_created", thread=thread.id)
+    return payload
+
+
+@app.get("/api/v1/threads", tags=["playground"])
+def list_threads(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Every conversation, most recently active first."""
+    from playground import store
+
+    found = store.list_threads(limit=limit, offset=offset)
+    return {
+        "count": store.count_threads(),
+        "threads": [thread.to_dict() for thread in found],
+    }
+
+
+@app.get("/api/v1/threads/{thread_id}", tags=["playground"])
+def read_thread(thread_id: str) -> dict:
+    """A conversation and everything said in it, oldest first."""
+    from playground import store
+
+    try:
+        thread = store.get_thread(thread_id)
+    except store.ThreadNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    return {
+        "thread": thread.to_dict(),
+        "messages": [message.to_dict() for message in store.messages(thread_id)],
+    }
+
+
+@app.post("/api/v1/threads/{thread_id}/messages", tags=["playground"], status_code=202)
+def post_message(thread_id: str, request: ThreadMessageRequest) -> dict:
+    """Say something, and queue the agent's reply.
+
+    Queued rather than answered inline. A turn routed to the loop runs for
+    thirty seconds to two minutes, and there are four HTTP workers — holding
+    one open for that is the problem the agents queue exists to avoid.
+    """
+    from playground import store, threads
+
+    try:
+        store.get_thread(thread_id)
+    except store.ThreadNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    if threads.in_flight(thread_id):
+        raise HTTPException(
+            409,
+            "this thread is already waiting on a reply. Two agents appending to "
+            "one history produce a transcript neither was answering.",
+        )
+
+    return _queue_reply(thread_id, request.content, request.local_only)
+
+
+@app.get("/api/v1/threads/{thread_id}/replies/{task_id}", tags=["playground"])
+def reply_status(thread_id: str, task_id: str) -> dict:
+    """Progress while the agent works, then the message it stored."""
+    result = AsyncResult(task_id, app=celery_app)
+    status = result.status
+    response: dict[str, Any] = {
+        "thread_id": thread_id, "task_id": task_id, "status": status, "done": False
+    }
+
+    if status == "PROGRESS":
+        response["progress"] = result.info if isinstance(result.info, dict) else {}
+        return response
+    if not result.ready():
+        return response
+
+    response["done"] = True
+    if result.successful():
+        response["result"] = result.result
+    else:
+        response["error"] = str(result.result)
+    return response
+
+
+@app.delete("/api/v1/threads/{thread_id}", tags=["playground"])
+def discard_thread(thread_id: str) -> dict:
+    """Delete a conversation and everything in it."""
+    from playground import store
+
+    try:
+        removed = store.delete_thread(thread_id)
+    except store.ThreadNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    log.info("api.thread_deleted", thread=thread_id, messages=removed)
+    return {"status": "deleted", "id": thread_id, "messages_removed": removed}
 
 
 @app.get("/api/v1/skills", tags=["skills"])
