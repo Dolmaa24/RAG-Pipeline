@@ -705,7 +705,7 @@ def playground_reply(
 @celery_app.task(bind=True, name="tasks.build_project")
 def build_project(
     self,
-    skill: str,
+    skill: Optional[str] = None,
     *,
     intent: str = "",
     allow_execute: bool = False,
@@ -720,17 +720,40 @@ def build_project(
     ``allow_execute`` is the second gate. Writing source and running it are
     separate effects, so a build that produces a scaffold for a person to read
     is the default and executing it is asked for.
+
+    ``skill`` may be omitted. Then the intent decides: an existing skill if one
+    fits, and otherwise a new one written here and reused by everything after.
+    That is what lets a build of a domain nobody anticipated work at all.
     """
     with job_context(self.request.id, f"build {skill}"):
         from pipeline.agents.budget import Budget
         from pipeline.agents.builder import Builder
         from pipeline.skills import get as get_skill
 
-        try:
-            chosen = get_skill(skill)
-        except Exception as exc:
-            log.warning("task.build_unknown_skill", skill=skill, error=repr(exc))
-            return {"skill": skill, "stopped": str(exc), "files": [], "steps": []}
+        created = False
+        if skill:
+            try:
+                chosen = get_skill(skill)
+            except Exception as exc:
+                log.warning("task.build_unknown_skill", skill=skill, error=repr(exc))
+                return {"skill": skill, "stopped": str(exc), "files": [], "steps": []}
+        else:
+            # No skill named and none matched at the API. Write the domain
+            # down here — in the worker, because drafting is a model call —
+            # and every later request about it reuses what was written.
+            from pipeline.skills import synth
+
+            chosen, created = synth.ensure(intent)
+            if chosen is None:
+                return {
+                    "skill": None,
+                    "stopped": (
+                        "no skill matched this intent and one could not be "
+                        "written for it. Draft one at /api/v1/skills/draft."
+                    ),
+                    "files": [],
+                    "steps": [],
+                }
 
         base = Budget.from_config()
         budget = Budget(
@@ -749,9 +772,12 @@ def build_project(
 
         try:
             result = Builder(
-                chosen, intent=intent, budget=budget, on_progress=report
+                chosen, intent=intent or chosen.description,
+                budget=budget, on_progress=report,
             ).build()
-            return result.to_dict()
+            payload = result.to_dict()
+            payload["skill_created"] = created
+            return payload
         except SoftTimeLimitExceeded:
             log.error("task.soft_timeout", skill=skill, task="build_project")
             raise

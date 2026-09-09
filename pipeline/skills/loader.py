@@ -119,6 +119,8 @@ def parse(text: str, *, source: str = "<string>") -> Skill:
 
     return Skill(
         agents=_agents(meta.get("agents"), source),
+        generated=bool(meta.get("generated", False)),
+        drafted_from=" ".join(str(meta.get("drafted_from") or "").split()),
         name=name,
         description=" ".join(str(meta["description"]).split()),
         triggers=tuple(_strings(meta.get("triggers"), source, "triggers")),
@@ -201,6 +203,8 @@ def _fields(skill: Skill) -> dict[str, Any]:
         "entity_types": skill.entity_types,
         "relation_types": skill.relation_types,
         "agents": skill.agents,
+        "generated": skill.generated,
+        "drafted_from": skill.drafted_from,
     }
 
 

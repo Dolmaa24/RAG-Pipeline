@@ -1076,6 +1076,70 @@ underwriter, claims, policy admin and payments.
 `skills/README.md` has the field reference and how to add one. The API picks up
 an edited skill on its own; **Celery workers do not, so restart them.**
 
+### Any domain, not just the four that shipped
+
+Four skills ship. A request about a library, a gym or a restaurant matched none
+of them, got the generic specialist, and a *build* of one was refused outright —
+which made the whole thing a demo of four domains rather than a system.
+
+Now an unmatched intent has a skill written for it, once, and **every request
+after it reuses what was written**. That second half is the point: a system that
+re-derives the same domain on every question has not learned anything.
+
+```
+ensure("a library book lending system")
+  -> library   created=True
+     triggers: checkout, hold, overdue, ISBN, call number, circulation desk…
+     agents:   circulation_desk, cataloguer, patron_portal, fine_processor
+
+ensure("where can I borrow a book from the library")
+  -> library   created=False        # reused, different words
+```
+
+An existing skill always wins, so a hand-written file is never shadowed and
+near-duplicates do not accumulate. Auto-written skills are marked `generated`
+in their frontmatter, carry the request that produced them, and are labelled in
+the dashboard — which is how a bad one gets found and deleted rather than
+quietly answering for ever.
+
+**Automation does not widen what a skill may do.** The intent is the user's own
+words, not something fetched from a page, and every guard still holds:
+`requires` is forced to `read`, so a written skill cannot reach the network or
+touch the corpus, and every tool name is checked against the registry. A bad
+generation is a worse prompt, not a wider permission.
+
+`SKILLS_AUTO_CREATE=false` turns it off; then an unmatched intent gets the
+generic specialist and a draft you approve by hand, as before.
+
+**A conversation keeps the domain its first message established.** Only that
+message describes a subject area; everything after it is a question *within*
+that subject. Matching each turn independently made the agent drift between
+specialists mid-thread and, worse, invent domains out of a follow-up's nouns —
+measured, a gym thread whose second question asked about classes had a
+`classes` skill written for it, name and triggers lifted straight from the
+question, which then matched anything mentioning a class.
+
+Two guards remain against that. A written skill must actually describe a field:
+at least six triggers, a description of real length, and not a restatement of
+the request. And `LLM_SKILL_BACKEND` is hosted, for the reason `SELECTOR` and
+`ARCHITECT` are — one call per domain, reused by every request about it
+afterwards. That one is measured too: `llama3.2:3b` could not describe a
+library lending system at all, so the feature that makes this work on any
+domain did not work on the local model.
+
+**Known limit.** A new domain that shares vocabulary with an existing skill is
+absorbed by it — "a shipping and freight logistics system" matches `ecommerce`,
+because `shipping` is one of its trigger words. That is the matcher working as
+designed, and the fix is to name the skill you want on the request or to narrow
+the overlapping trigger.
+
+Two things worth knowing about the matcher underneath it. With **one** skill
+installed there is no margin to test — the best has nothing to lead — so the
+embedding fallback is skipped entirely and only triggers can match. Without
+that, the first written skill would answer everything and no second domain
+would ever be described. And drafting is a model call, so it happens in the
+worker; an HTTP handler never makes one.
+
 ### Drafting a skill for a domain nothing covers
 
 Ask for something outside the four shipped domains and the honest answer is that

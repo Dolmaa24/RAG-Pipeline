@@ -369,3 +369,91 @@ def test_the_matched_skill_composes_the_specialist(tmp_path, monkeypatch):
     assert result.message.meta["skill"] == "insurance"
     assert result.message.meta["ran"] == ["insurance"]
     store.reset_cache()
+
+
+# --- a thread holds its domain ---------------------------------------------
+
+
+def test_a_thread_keeps_the_domain_its_first_message_established(tmp_path, monkeypatch):
+    """Only the opening message describes a subject area. Matching every turn
+    independently makes the agent drift between specialists mid-conversation."""
+    monkeypatch.setattr(config, "PLAYGROUND_DB_PATH", str(tmp_path / "pg.db"))
+    store.reset_cache()
+    from playground import threads
+
+    thread = store.create_thread()
+    store.append_message(thread.id, "user", "opening")
+    store.append_message(thread.id, "assistant", "an answer", meta={"skill": "insurance"})
+
+    assert threads.established(thread.id) == "insurance"
+    store.reset_cache()
+
+
+def test_the_most_recent_domain_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PLAYGROUND_DB_PATH", str(tmp_path / "pg.db"))
+    store.reset_cache()
+    from playground import threads
+
+    thread = store.create_thread()
+    store.append_message(thread.id, "assistant", "a", meta={"skill": "school"})
+    store.append_message(thread.id, "assistant", "b", meta={"skill": "health"})
+    assert threads.established(thread.id) == "health"
+    store.reset_cache()
+
+
+def test_a_thread_with_no_domain_yet_has_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PLAYGROUND_DB_PATH", str(tmp_path / "pg.db"))
+    store.reset_cache()
+    from playground import threads
+
+    thread = store.create_thread()
+    store.append_message(thread.id, "assistant", "a", meta={"skill": None})
+    assert threads.established(thread.id) is None
+    store.reset_cache()
+
+
+def test_a_follow_up_does_not_get_a_skill_written_for_it(tmp_path, monkeypatch):
+    """The failure this prevents, measured: a gym thread whose follow-up asked
+    "which classes are most popular with members" had a `classes` skill written
+    — name, description and triggers all lifted from the question — which then
+    matched anything mentioning a class."""
+    monkeypatch.setattr(config, "PLAYGROUND_DB_PATH", str(tmp_path / "pg.db"))
+    store.reset_cache()
+    from pipeline.skills import synth
+    from playground import threads
+
+    def explode(*args, **kwargs):
+        raise AssertionError("a follow-up triggered skill creation")
+
+    monkeypatch.setattr(synth, "ensure", explode)
+
+    thread = store.create_thread()
+    store.append_message(thread.id, "assistant", "first answer", meta={"skill": "school"})
+    store.append_message(thread.id, "user", "which classes are most popular")
+
+    class FakeSupervisor:
+        def investigate(self, question):
+            class R:
+                answer, sufficient = "ok", True
+                sources: list = []
+                trace: list = []
+                warnings: list = []
+            return R()
+
+    result = threads.reply(
+        thread.id, "which classes are most popular", supervisor=FakeSupervisor()
+    )
+    assert result.message.meta["skill"] == "school"
+    store.reset_cache()
+
+
+def test_holding_can_be_turned_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PLAYGROUND_DB_PATH", str(tmp_path / "pg.db"))
+    monkeypatch.setattr(config, "SKILLS_HOLD_THREAD_DOMAIN", False)
+    store.reset_cache()
+    from playground import threads
+
+    thread = store.create_thread()
+    store.append_message(thread.id, "assistant", "a", meta={"skill": "insurance"})
+    assert threads.established(thread.id) is None
+    store.reset_cache()

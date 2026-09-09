@@ -266,3 +266,34 @@ def test_a_generic_question_reaches_no_skill(intent):
     scored 0.508-0.586 against their nearest skill, inside the range genuine
     domain intents occupy. The margin is what refuses them."""
     assert match(intent).skill is None
+
+
+def test_a_single_installed_skill_does_not_match_everything():
+    """The margin test compares the best against the rest. With one skill there
+    is no rest, `runner_up` was 0.0, and every intent cleared it — so the only
+    skill answered everything.
+
+    With auto-creation on that is worse than a wrong answer: the first skill
+    written would match every later intent, and no second domain would ever be
+    described.
+    """
+    only = {"barista": skill("barista", "espresso, latte", "A barista domain.")}
+    stub = StubEmbedder({"barista": 0.62})
+    assert match("a library book lending system", skills=only, embedder=stub).skill is None
+
+
+def test_a_single_skill_still_matches_its_own_trigger():
+    """Triggers are exact, so they discriminate where embeddings cannot."""
+    only = {"barista": skill("barista", "espresso, latte")}
+    assert match("how do I pull an espresso", skills=only).skill.name == "barista"
+
+
+def test_two_skills_restore_the_margin_test():
+    two = {
+        # The stub scores by finding the name in the skill's own text, so the
+        # descriptions have to carry it.
+        "barista": skill("barista", "espresso", "A barista domain."),
+        "library": skill("library", "borrow", "A library domain."),
+    }
+    stub = StubEmbedder({"barista": 0.40, "library": 0.62})
+    assert match("a book lending system", skills=two, embedder=stub).skill.name == "library"

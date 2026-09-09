@@ -79,6 +79,14 @@ class Skill:
     #: shipped ones -- and a build of such a skill is refused rather than
     #: producing an empty workspace.
     agents: tuple[BuildAgent, ...] = ()
+    #: True when a model wrote this rather than a person. It changes nothing
+    #: about what the skill may do -- ``requires`` is forced to read either way
+    #: -- but a hand-written skill wins a tie against one, and the interface
+    #: says which is which so a bad auto-created domain can be found and
+    #: deleted rather than quietly answering for ever.
+    generated: bool = False
+    #: The request that produced it, for a generated skill.
+    drafted_from: str = ""
     path: Optional[Path] = None
 
     def as_role(self) -> Role:
@@ -130,6 +138,8 @@ class Skill:
             "relation_types": list(self.relation_types),
             "agents": [agent.to_dict() for agent in self.agents],
             "buildable": self.buildable,
+            "generated": self.generated,
+            "drafted_from": self.drafted_from,
         }
 
 

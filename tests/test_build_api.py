@@ -238,8 +238,37 @@ def test_a_skill_with_no_roster_is_refused_before_queueing(client, skills_root, 
 
 
 @pytest.mark.slow
-def test_an_unmatched_intent_points_at_drafting(client, installed, queued):
-    response = client.post("/api/v1/build", json={"intent": "who wrote this document"})
+def test_a_domain_nobody_anticipated_is_queued_anyway(client, installed, queued):
+    """The limitation this replaced: four skills shipped, and a build of a
+    library, a gym or a restaurant was refused outright.
+
+    No skill is named in the response because there is not one yet — the worker
+    writes the domain down before building it, drafting being a model call and
+    an HTTP handler being the wrong place for one.
+
+    Marked slow: no trigger fires, so the real embedder settles that there is
+    no match before the fallback takes over.
+    """
+    response = client.post(
+        "/api/v1/build", json={"intent": "a library book lending system"}
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["skill"] is None
+    assert body["writing_skill"] is True
+    assert queued["skill"] is None
+    assert queued["intent"] == "a library book lending system"
+
+
+@pytest.mark.slow
+def test_with_auto_create_off_an_unmatched_intent_points_at_drafting(
+    client, installed, queued, monkeypatch
+):
+    """For anyone who would rather approve every skill by hand."""
+    monkeypatch.setattr(config, "SKILLS_AUTO_CREATE", False)
+    response = client.post(
+        "/api/v1/build", json={"intent": "a library book lending system"}
+    )
     assert response.status_code == 400
     assert "/api/v1/skills/draft" in response.json()["detail"]
 

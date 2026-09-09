@@ -904,9 +904,9 @@ with task_tab:
                 )
             else:
                 st.caption(
-                    "No skill matched, so the generic corpus specialist will "
-                    "run — which is what every question got before skills "
-                    "existed. Naming one above is how you force a domain."
+                    "No skill matched here. Sending it writes one for this "
+                    "domain and reuses it from then on; drafting it below "
+                    "instead lets you read it before anything runs."
                 )
                 # Offered here because here is where the gap shows up. The
                 # draft is written to a folder the loader ignores; approving
@@ -1101,17 +1101,25 @@ def render_context_panel(messages: list[dict], catalogue: list[dict], drafts: li
 
         skill = meta.get("skill")
         if skill:
-            st.markdown(f"**Domain** · `{skill}`")
+            st.markdown(
+                f"**Domain** · `{skill}`"
+                + ("  ✎ written for this" if meta.get("skill_created") else "")
+            )
             st.caption(
                 f"{meta.get('why_skill','')} "
                 f"(confidence {meta.get('skill_confidence', 0)})"
             )
+            if meta.get("skill_created"):
+                st.caption(
+                    "Nothing covered this, so the domain was written down. "
+                    "Every question about it from now on reuses it."
+                )
         else:
             st.markdown("**Domain** · _generic corpus specialist_")
             st.caption(
-                "No skill matched, so the agent ran with the default prompt and "
-                "the full read-only catalogue — what every question got before "
-                "skills existed."
+                "No skill matched and none could be written, so the agent ran "
+                "with the default prompt and the full read-only catalogue — "
+                "what every question got before skills existed."
             )
 
         runners = meta.get("runners_up") or []
@@ -1171,15 +1179,26 @@ def render_context_panel(messages: list[dict], catalogue: list[dict], drafts: li
     st.divider()
 
     st.markdown("**Skills**")
-    st.caption(f"{len(catalogue)} installed:")
+    written = [e for e in catalogue if e.get("generated")]
+    st.caption(
+        f"{len(catalogue)} installed"
+        + (f", {len(written)} written for a request" if written else "")
+        + ":"
+    )
     for entry in catalogue:
         mark = " ← in use" if entry["name"] == meta.get("skill") else ""
+        # Which a model wrote is worth seeing at a glance: it is how a bad
+        # auto-created domain gets found and deleted rather than quietly
+        # answering for ever.
+        origin = " · written for a request" if entry.get("generated") else ""
         st.markdown(
             f"- `{entry['name']}`{mark}  \n"
             f"  <span style='color:#888'>{len(entry.get('tools') or [])} tools · "
-            f"{len(entry.get('agents') or [])} agents</span>",
+            f"{len(entry.get('agents') or [])} agents{origin}</span>",
             unsafe_allow_html=True,
         )
+        if entry.get("generated") and entry.get("drafted_from"):
+            st.caption(f"   from: {entry['drafted_from'][:70]}")
 
     if drafts:
         st.caption(f"{len(drafts)} drafted, awaiting your review:")

@@ -247,7 +247,23 @@ def match(
     #: which is inside the range genuine domain intents occupy. What a real
     #: domain intent does that a generic one does not is *pull away from the
     #: rest*, and that is scale-free where an absolute cut is not.
-    runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
+    if len(ordered) < 2:
+        # One skill installed, so there is nothing to lead. The margin test
+        # compares the best against the rest, and with no rest `runner_up`
+        # would be 0.0 and every intent would clear it -- the single skill
+        # would answer everything, and with auto-creation on, no second skill
+        # would ever be written because the first always matched.
+        #
+        # The absolute score cannot stand in for it either: measured, generic
+        # questions scored 0.508-0.620 against their nearest skill and genuine
+        # domain intents 0.480-0.672, which overlap completely. So with one
+        # skill there is no signal here at all, and triggers -- which already
+        # ran -- are the only honest answer.
+        metrics.incr("skills.match.none")
+        log.info("skills.unmatched", reason="only one skill; no margin to test")
+        return Match(None, confidence=ordered[0][1], runners_up=ordered[:1])
+
+    runner_up = ordered[1][1]
     margin = score - runner_up
     if score < config.SKILLS_MIN_SIMILARITY or margin < config.SKILLS_MIN_MARGIN:
         metrics.incr("skills.match.none")

@@ -1235,13 +1235,13 @@ def start_build(request: BuildRequest) -> dict:
     except SkillError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    if matched.skill is None:
+    if matched.skill is None and not (config.SKILLS_AUTO_CREATE and request.intent):
         raise HTTPException(
             400,
-            "no skill matched this intent. Draft one at /api/v1/skills/draft, "
-            "approve it, then build.",
+            "no skill matched this intent, and writing one is off. Draft one at "
+            "/api/v1/skills/draft, approve it, then build.",
         )
-    if not matched.skill.buildable:
+    if matched.skill is not None and not matched.skill.buildable:
         raise HTTPException(
             400,
             f"the {matched.skill.name!r} skill declares no agents, so there is "
@@ -1249,9 +1249,12 @@ def start_build(request: BuildRequest) -> dict:
         )
 
     try:
+        # A matched skill is named; an unmatched intent is not, and the worker
+        # writes the domain down before building it. Deciding that here would
+        # mean a model call inside an HTTP handler.
         task = build_project.delay(
-            matched.skill.name,
-            intent=request.intent or matched.skill.description,
+            matched.skill.name if matched.skill else None,
+            intent=request.intent or (matched.skill.description if matched.skill else ""),
             allow_execute=request.allow_execute,
         )
     except Exception as exc:
@@ -1259,15 +1262,19 @@ def start_build(request: BuildRequest) -> dict:
 
     log.info(
         "api.build",
-        skill=matched.skill.name,
+        skill=matched.skill.name if matched.skill else None,
+        writing_skill=matched.skill is None,
         execute=request.allow_execute,
         intent=request.intent[:80],
     )
     return {
         "status": "queued",
         "task_id": task.id,
-        "skill": matched.skill.name,
-        "agents": [agent.to_dict() for agent in matched.skill.agents],
+        "skill": matched.skill.name if matched.skill else None,
+        "agents": (
+            [agent.to_dict() for agent in matched.skill.agents] if matched.skill else []
+        ),
+        "writing_skill": matched.skill is None,
         "will_run_tests": request.allow_execute,
         "poll": f"/api/v1/builds/{task.id}",
     }
@@ -1346,6 +1353,7 @@ def run_task(request: TaskRequest) -> dict:
         # is the one case where there is something useful to do next, and the
         # generic specialist answering badly does not suggest it.
         "can_draft_skill": matched.skill is None,
+        "will_write_skill": bool(matched.skill is None and config.SKILLS_AUTO_CREATE),
         "poll": f"/api/v1/investigations/{task.id}",
     }
 

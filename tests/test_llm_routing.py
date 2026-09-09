@@ -253,3 +253,21 @@ def test_a_groq_turn_with_tools_still_sends_the_choice():
 
     assert sent["tool_choice"] == "required"
     assert len(sent["tools"]) == 1
+
+
+def test_writing_a_skill_defaults_to_the_hosted_model():
+    """One call per domain, reused by every request about that subject after.
+    Measured: llama3.2:3b could not describe a library lending system at all,
+    which turned "works on any domain" back into "works on four"."""
+    from pipeline.extract.llm import SKILL, _configured
+
+    assert _configured(SKILL) == "groq"
+
+
+def test_the_one_call_roles_all_prefer_the_hosted_model():
+    """Selector, architect and skill share a shape: paid once, replayed many
+    times. They should not drift apart on this."""
+    from config import config
+
+    assert config.LLM_SKILL_BACKEND == "groq"
+    assert config.LLM_ARCHITECT_BACKEND == "groq"

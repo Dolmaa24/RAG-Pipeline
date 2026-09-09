@@ -183,6 +183,12 @@ class EngineConfig(BaseSettings):
     #: reasoning as LLM_SELECTOR_BACKEND -- spend hosted tokens where one call
     #: is replayed across many.
     LLM_ARCHITECT_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = "groq"
+    #: Which backend writes a skill for a domain nothing covers. Hosted, for
+    #: the same reason the two above are: one call per domain, reused by every
+    #: request about that subject afterwards. And measured -- llama3.2:3b
+    #: failed to describe a library lending system at all, which turned "works
+    #: on any domain" back into "works on four".
+    LLM_SKILL_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = "groq"
     #: The local model that writes source, when the code backend is Ollama.
     #: A coding model rather than the tool-calling one: llama3.2:3b picks tools
     #: well and writes poor Python. Falls back to AGENT_MODEL_NAME with a
@@ -278,6 +284,24 @@ class EngineConfig(BaseSettings):
     #: an agent's own system prompt, and nothing writes one of those into the
     #: live set without a human in between.
     SKILLS_DRAFTS_DIR: str = "_drafts"
+    #: Write a skill for a domain nothing covers, rather than falling back to
+    #: the generic specialist for ever. The first request about a library or a
+    #: gym describes that domain; every request after it reuses what was
+    #: written, which is the half that matters -- a system that re-derives the
+    #: same domain on every question has not learned anything.
+    #:
+    #: An auto-created skill is marked `generated` and still cannot grant
+    #: itself anything: `requires` is forced to read and its tools are checked
+    #: against the registry, so a bad generation is a worse prompt rather than
+    #: a wider permission. Off means an unmatched intent gets the generic
+    #: specialist and a draft you approve by hand.
+    SKILLS_AUTO_CREATE: bool = True
+    #: A conversation keeps the domain its first message established. Only
+    #: that message describes a subject area; everything after is a question
+    #: within it, and matching each independently makes the agent drift between
+    #: specialists mid-thread -- and, with auto-creation on, invent a domain out
+    #: of a follow-up's nouns. Off means every message is matched afresh.
+    SKILLS_HOLD_THREAD_DOMAIN: bool = True
 
     #: The build workflow writes source files and, when separately allowed,
     #: runs them. Off until asked for -- every other feature here reads.

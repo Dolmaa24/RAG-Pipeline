@@ -71,7 +71,9 @@ def plan(question: str) -> str:
     return route(question).path
 
 
-def breakdown(question: str, *, allow_embedding: bool = True) -> dict[str, Any]:
+def breakdown(
+    question: str, *, allow_embedding: bool = True, skill: Optional[str] = None
+) -> dict[str, Any]:
     """Everything decided about a message before any model is called.
 
     Two routing decisions and no model between them, which is what makes this
@@ -84,22 +86,41 @@ def breakdown(question: str, *, allow_embedding: bool = True) -> dict[str, Any]:
 
     decision = route(question)
     found = _match(question, allow_embedding=allow_embedding)
-    skill = found.skill if found else None
+    chosen = found.skill if found else None
+
+    # A skill resolved by the caller — ensure() having just written one, or a
+    # person naming it — is what runs, whatever the matcher would have said.
+    if skill and (chosen is None or chosen.name != skill):
+        try:
+            from pipeline.skills import get as get_skill
+
+            chosen = get_skill(skill)
+            found = None
+        except Exception as exc:
+            log.warning("playground.skill_missing", skill=skill, error=repr(exc))
+    skill_object = chosen
 
     return {
         "path": decision.path,
         "why_path": decision.reason,
-        "skill": skill.name if skill else None,
-        "skill_how": found.how if found else "none",
+        "skill": skill_object.name if skill_object else None,
+        "skill_how": found.how if found else ("resolved" if skill_object else "none"),
         "skill_confidence": round(found.confidence, 3) if found else 0.0,
-        "why_skill": found.explain() if found else "skills are off",
+        "why_skill": (
+            found.explain() if found
+            else (f"{skill_object.name} was written for this request"
+                  if skill_object else "no skill matched")
+        ),
         "runners_up": [
             {"skill": name, "score": round(score, 3)}
             for name, score in (found.runners_up if found else [])
         ],
-        "tools": list(skill.tools) if skill else [],
-        "agents": [agent.to_dict() for agent in skill.agents] if skill else [],
-        "buildable": bool(skill and skill.buildable),
+        "tools": list(skill_object.tools) if skill_object else [],
+        "agents": (
+            [agent.to_dict() for agent in skill_object.agents] if skill_object else []
+        ),
+        "buildable": bool(skill_object and skill_object.buildable),
+        "generated": bool(skill_object and skill_object.generated),
     }
 
 
@@ -131,6 +152,37 @@ def start_turn(
     return store.append_message(thread_id, "user", content, path=path)
 
 
+def established(thread_id: str, *, path: Optional[Path] = None) -> Optional[str]:
+    """The domain this conversation is already in, if any.
+
+    A thread holds its domain. Only the opening message describes a subject
+    area; everything after it is a question *within* that subject, and matching
+    each one independently produces two bad outcomes.
+
+    It drifts: "which classes are most popular with members" does not look like
+    the gym question that started the thread, so a turn later the agent is
+    answering as a different specialist with different tools.
+
+    And with a skill written for an unmatched intent, it manufactures rubbish.
+    Measured: a gym thread whose follow-up asked about classes had a `classes`
+    skill written for it — name, description and triggers all lifted from the
+    question — which then matched anything mentioning a class.
+
+    So the domain is decided once, by the message that opened the thread, and
+    held. A person who wants a different one starts a different conversation,
+    which is also how they would think about it.
+    """
+    if not config.SKILLS_HOLD_THREAD_DOMAIN:
+        return None
+    for message in reversed(store.messages(thread_id, path=path)):
+        if message.role != "assistant":
+            continue
+        named = (message.meta or {}).get("skill")
+        if named:
+            return str(named)
+    return None
+
+
 def in_flight(thread_id: str, *, path: Optional[Path] = None) -> bool:
     """Whether this thread is waiting on a reply.
 
@@ -145,6 +197,7 @@ def reply(
     thread_id: str,
     question: str,
     *,
+    skill: Optional[str] = None,
     local_only: bool = False,
     on_progress=None,
     path: Optional[Path] = None,
@@ -155,7 +208,27 @@ def reply(
     import time
 
     started = time.perf_counter()
-    decided = breakdown(question)
+
+    # Resolved here, in the worker, rather than in the API: this may write a
+    # skill, which is a model call, and an HTTP handler is the wrong place for
+    # one. An existing skill is reused; a domain nothing covers is written down
+    # once and reused by every question after it.
+    created = False
+    if not skill:
+        skill = established(thread_id, path=path)
+        if skill:
+            log.debug("playground.domain_held", thread=thread_id, skill=skill)
+        else:
+            try:
+                from pipeline.skills import synth
+
+                chosen_skill, created = synth.ensure(question, local_only=local_only)
+                skill = chosen_skill.name if chosen_skill else None
+            except Exception as exc:
+                log.warning("playground.ensure_failed", error=repr(exc))
+
+    decided = breakdown(question, skill=skill)
+    decided["skill_created"] = created
     chosen = decided["path"]
     hydration = context.hydrate(thread_id, path=path)
 
@@ -288,4 +361,4 @@ def _answer(question, hydration, *, local_only, answerer):
     )
 
 
-__all__ = ["Reply", "breakdown", "in_flight", "plan", "reply", "start_turn"]
+__all__ = ["Reply", "breakdown", "established", "in_flight", "plan", "reply", "start_turn"]

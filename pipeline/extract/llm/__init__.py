@@ -89,6 +89,16 @@ CODE = "code"
 #: workers do not consume that budget, so the hosted call goes where the
 #: leverage is and nowhere else.
 ARCHITECT = "architect"
+#: Writing the description of a domain — a skill file. The same shape as
+#: SELECTOR and ARCHITECT, and the same argument: **one call per domain**,
+#: whose output is then reused by every request about that subject for as long
+#: as the file exists. Nothing else in this project has that ratio.
+#:
+#: It also needs a model that can hold a brief. Measured: asked to describe a
+#: library lending system, llama3.2:3b failed outright and the request fell
+#: back to the generic specialist — so the feature that makes the system work
+#: on any domain did not work at all on the local model.
+SKILL = "skill"
 
 
 def get_backend(
@@ -124,7 +134,11 @@ def get_backend(
         # preference for the same reason interactive is: an unreachable
         # hosted model should make the pipeline slower and worse at tier 2,
         # not stop it extracting.
-        if explicit or role not in (INTERACTIVE, SELECTOR, CODE, ARCHITECT) or fallback == choice:
+        if (
+            explicit
+            or role not in (INTERACTIVE, SELECTOR, CODE, ARCHITECT, SKILL)
+            or fallback == choice
+        ):
             raise
         log.warning("llm.interactive_unavailable", wanted=choice, using=fallback)
         return _resolve(fallback)
@@ -161,6 +175,8 @@ def _configured(role: str) -> str:
         return config.LLM_CODE_BACKEND
     if role == ARCHITECT and config.LLM_ARCHITECT_BACKEND:
         return config.LLM_ARCHITECT_BACKEND
+    if role == SKILL and config.LLM_SKILL_BACKEND:
+        return config.LLM_SKILL_BACKEND
     return config.LLM_BACKEND
 
 
@@ -260,6 +276,7 @@ __all__ = [
     "BULK",
     "ARCHITECT",
     "CODE",
+    "SKILL",
     "SELECTOR",
     "VERIFY",
     "GroqBackend",

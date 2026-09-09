@@ -24,7 +24,8 @@ from pipeline.skills.models import SkillError
 PAYLOAD = {
     "name": "barista",
     "description": "Coffee shop operations: orders, drinks, the machine, the queue.",
-    "triggers": ["barista", "espresso", "latte", "cafe", "order queue"],
+    "triggers": ["barista", "espresso", "latte", "cafe", "order queue",
+                 "flat white", "grinder", "milk steaming"],
     "tools": ["corpus_profile", "search_corpus", "answer_from_corpus"],
     "system": "You answer questions about cafe operations from an indexed corpus.",
     "schema": {"drink": "string", "price": "number"},
@@ -121,6 +122,19 @@ def test_an_agent_name_is_made_url_safe():
 def test_duplicate_triggers_are_dropped():
     payload = {**PAYLOAD, "triggers": ["cafe", "Cafe", "CAFE", "latte"]}
     assert loader.parse(synth.render(payload)).triggers == ("cafe", "latte")
+
+
+def test_a_skill_named_after_the_field_is_fine_even_if_the_request_says_it():
+    """"a gym membership system" names its own field. Refusing that would
+    refuse most good descriptions."""
+    from pipeline.skills.synth import _too_thin
+
+    good = loader.parse(synth.render({
+        **PAYLOAD, "name": "gym",
+        "description": ("Fitness centres and gyms: memberships and joining fees, "
+                        "class timetables, trainers, equipment and attendance."),
+    }))
+    assert _too_thin(good, "How do I run a gym membership system?") == ""
 
 
 def test_a_folded_description_becomes_one_line():
@@ -307,3 +321,172 @@ def test_the_installed_skill_matches_the_intent_that_drafted_it(skills_root):
 
     installed = loader.load_all(skills_root, force=True)
     assert match("the espresso order queue", skills=installed).skill.name == "barista"
+
+
+# --- a domain nobody wrote a skill for -------------------------------------
+
+
+def test_an_existing_skill_is_reused_rather_than_duplicated(skills_root):
+    """The half that matters. A system that re-derives the same domain on every
+    question has not learned anything — and near-duplicates would accumulate
+    until the matcher could not tell them apart."""
+    existing = skills_root / "barista"
+    existing.mkdir()
+    (existing / "SKILL.md").write_text(
+        synth.render({**PAYLOAD, "name": "barista", "triggers": ["espresso", "latte"]})
+    )
+    from pipeline.skills import reset
+
+    reset()
+
+    skill, created = synth.ensure("how do I pull an espresso", backend=Stub())
+    assert skill is not None and skill.name == "barista"
+    assert created is False
+
+
+def test_a_domain_nothing_covers_gets_one_written(skills_root):
+    from pipeline.skills import reset
+
+    reset()
+    skill, created = synth.ensure("make a Baristo system", backend=Stub())
+
+    assert created is True
+    assert skill.name == "barista"
+    assert (skills_root / "barista" / "SKILL.md").is_file()
+
+
+def test_a_written_skill_is_marked_generated(skills_root):
+    """It changes nothing about what the skill may do; it is how a bad one gets
+    found and deleted rather than quietly answering for ever."""
+    from pipeline.skills import reset
+
+    reset()
+    skill, _ = synth.ensure("make a Baristo system", backend=Stub())
+    assert skill.generated is True
+    assert skill.drafted_from == "make a Baristo system"
+
+
+def test_a_written_skill_still_cannot_grant_itself_anything(skills_root):
+    """The security property survives automation. A model writing its own
+    prompt is bounded by this: read only, and tools that exist."""
+    from pipeline.skills import reset
+
+    reset()
+    skill, _ = synth.ensure(
+        "make a Baristo system",
+        backend=Stub({**PAYLOAD, "requires": "write", "tools": ["extract_url"]}),
+    )
+    assert skill.requires is Effect.READ
+
+
+def test_it_is_reused_on_the_next_request(skills_root):
+    """Written once, matched thereafter — including by different words, which
+    is why the description and triggers matter more than the name."""
+    from pipeline.skills import reset
+
+    reset()
+    first, created_first = synth.ensure("make a Baristo system", backend=Stub())
+    second, created_second = synth.ensure("the espresso order queue", backend=Stub())
+
+    assert created_first is True
+    assert created_second is False
+    assert second.name == first.name
+
+
+def test_turning_it_off_falls_back_to_the_generic_specialist(skills_root, monkeypatch):
+    from config import config
+    from pipeline.skills import reset
+
+    monkeypatch.setattr(config, "SKILLS_AUTO_CREATE", False)
+    reset()
+    skill, created = synth.ensure("make a Baristo system", backend=Stub())
+    assert skill is None and created is False
+
+
+def test_a_failed_generation_does_not_fail_the_turn(skills_root):
+    """The generic specialist is the floor, and it is a working one."""
+    class Broken:
+        name = model = "broken"
+
+        def complete_with_tools(self, **kwargs):
+            raise RuntimeError("the model is down")
+
+    from pipeline.skills import reset
+
+    reset()
+    skill, created = synth.ensure("make a Baristo system", backend=Broken())
+    assert skill is None and created is False
+
+
+def test_it_does_not_overwrite_a_file_already_there(skills_root):
+    """Two requests racing, or a model choosing a name a person already used.
+    The file on disk wins."""
+    existing = skills_root / "barista"
+    existing.mkdir()
+    (existing / "SKILL.md").write_text(
+        synth.render({**PAYLOAD, "triggers": ["nothing-matches-this"],
+                      "system": "The original prompt."})
+    )
+    from pipeline.skills import reset
+
+    reset()
+    skill, created = synth.ensure("make a Baristo system", backend=Stub())
+
+    assert created is False
+    assert "The original prompt." in (existing / "SKILL.md").read_text()
+
+
+def test_an_empty_intent_writes_nothing(skills_root):
+    assert synth.ensure("   ", backend=Stub()) == (None, False)
+
+
+def test_a_skill_named_after_a_word_in_the_request_is_rejected(skills_root):
+    """Measured. Given "which classes are the most popular with members",
+    gpt-oss-120b returned name `classes`, description "the most popular classes
+    among members", three triggers — the question, not a field. Installed, its
+    `classes` trigger matched every later request mentioning a class."""
+    from pipeline.skills import reset
+
+    reset()
+    junk = {
+        **PAYLOAD,
+        "name": "classes",
+        "description": "the most popular classes among members",
+        "triggers": ["classes", "most popular", "member classes"],
+    }
+    skill, created = synth.ensure(
+        "which classes are the most popular with members", backend=Stub(junk)
+    )
+    assert skill is None and created is False
+    assert not (skills_root / "classes").exists()
+
+
+def test_a_skill_with_too_little_vocabulary_is_rejected(skills_root):
+    from pipeline.skills import reset
+
+    reset()
+    thin = {**PAYLOAD, "name": "widgets", "triggers": ["widget", "thing"]}
+    skill, _ = synth.ensure("make a widget system", backend=Stub(thin))
+    assert skill is None
+
+
+def test_a_properly_described_field_is_accepted(skills_root):
+    """The gate must not reject a good one — it is the difference between
+    working on any domain and working on none."""
+    from pipeline.skills import reset
+
+    reset()
+    good = {
+        **PAYLOAD,
+        "name": "gym",
+        "description": (
+            "Fitness centres and gyms: memberships and joining fees, class "
+            "timetables and bookings, trainers, equipment and attendance."
+        ),
+        "triggers": ["gym", "membership", "personal trainer", "treadmill",
+                     "class booking", "peak hours", "induction", "day pass"],
+    }
+    skill, created = synth.ensure(
+        "How do I run a gym membership and class booking system?", backend=Stub(good)
+    )
+    assert created is True and skill.name == "gym"

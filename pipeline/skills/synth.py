@@ -129,14 +129,26 @@ _PROMPT = """\
 You are describing a subject domain so that a retrieval system can specialise in
 it, and so that a code generator can decompose it into workers.
 
-name — one lowercase word for the domain. Letters, digits, hyphens, underscores.
+The request below may be a whole project or a single question. Either way,
+describe **the subject area it belongs to**, not the request itself. Asked
+"which classes are most popular with members", the domain is gyms and fitness
+memberships — not "classes". Asked "what is the excess on my policy", the
+domain is insurance — not "excess". A domain is a field somebody could work in
+for years; a request is one thing somebody wanted once.
 
-description — one sentence naming what the domain is about, written in the
-domain's own vocabulary. It is compared against future requests by meaning, so
-the words that belong to this subject matter more than a tidy sentence does.
+name — one lowercase word naming that field. Letters, digits, hyphens,
+underscores. Never a noun lifted from the request: "gym", not "classes";
+"insurance", not "excess"; "logistics", not "my parcel".
 
-triggers — 10 to 20 words and short phrases that mean this domain and little
-else. Prefer terms that would be strange in another subject. Singular forms;
+description — two or three sentences on what the field covers, written in its
+own vocabulary. It is compared against future requests by meaning, so breadth
+matters: name the things the field deals with, not the one thing that was
+asked. It must make sense to someone who never saw the request.
+
+triggers — 10 to 20 words and short phrases that mean this field and little
+else. Terms a practitioner would use. Prefer ones that would be strange in
+another subject, and never a generic word the request happened to contain —
+"classes", "system", "popular" and "most" belong to no field. Singular forms;
 plurals are matched automatically.
 
 tools — choose from the list below, by exact name. Nothing else exists.
@@ -209,19 +221,22 @@ class Drafted:
     text: str
 
 
-def draft(intent: str, *, backend=None, local_only: bool = False) -> Drafted:
+def draft(
+    intent: str, *, backend=None, local_only: bool = False, generated: bool = False
+) -> Drafted:
     """Propose a skill for ``intent``. Never installs it."""
     text = (intent or "").strip()
     if not text:
         raise SkillError("an intent is required to draft a skill")
 
     if backend is None:
-        from pipeline.extract.llm import INTERACTIVE, get_agent_backend
+        from pipeline.extract.llm import SKILL, get_agent_backend
 
         # The agent backend, because this goes through the tool-calling path —
         # which also means a model without native tool support is shimmed into
-        # constrained JSON rather than failing here.
-        backend = get_agent_backend(local_only=local_only, role=INTERACTIVE)
+        # constrained JSON rather than failing here. The SKILL role decides
+        # which model: one call per domain, reused for ever after.
+        backend = get_agent_backend(local_only=local_only, role=SKILL)
 
     from pipeline.extract.llm.base import Message
 
@@ -244,7 +259,7 @@ def draft(intent: str, *, backend=None, local_only: bool = False) -> Drafted:
             + (f" — it replied: {turn.text[:200]}" if turn.text else "")
         )
 
-    drafted = _from_payload(data, intent=text)
+    drafted = _from_payload(data, intent=text, generated=generated)
     log.info(
         "skills.drafted",
         name=drafted.skill.name,
@@ -256,7 +271,7 @@ def draft(intent: str, *, backend=None, local_only: bool = False) -> Drafted:
     return drafted
 
 
-def _from_payload(data: dict[str, Any], *, intent: str) -> Drafted:
+def _from_payload(data: dict[str, Any], *, intent: str, generated: bool = False) -> Drafted:
     """Turn the model's object into a skill, by rendering and re-parsing it.
 
     Deliberately round-tripped through :func:`loader.parse` rather than
@@ -264,14 +279,14 @@ def _from_payload(data: dict[str, Any], *, intent: str) -> Drafted:
     unknown tools, a bad name, an empty body, a malformed roster — so a drafted
     skill cannot be accepted on a path a hand-written one would fail.
     """
-    rendered = render(data, intent=intent)
+    rendered = render(data, intent=intent, generated=generated)
     try:
         return Drafted(loader.parse(rendered, source="<drafted>"), rendered)
     except SkillError as exc:
         raise SkillError(f"the drafted skill is not valid — {exc}") from exc
 
 
-def render(data: dict[str, Any], *, intent: str = "") -> str:
+def render(data: dict[str, Any], *, intent: str = "", generated: bool = False) -> str:
     """A SKILL.md from the model's object. Pure, and the only writer of YAML."""
     name = _slug(str(data.get("name") or "").strip())
     frontmatter: dict[str, Any] = {
@@ -305,6 +320,8 @@ def render(data: dict[str, Any], *, intent: str = "") -> str:
     # run, and it would also make an empty prompt look like a non-empty file.
     if intent.strip():
         frontmatter["drafted_from"] = " ".join(intent.split())
+    if generated:
+        frontmatter["generated"] = True
 
     body = str(data.get("system") or "").strip()
     header = yaml.safe_dump(
@@ -429,9 +446,155 @@ def discard(name: str, directory: Optional[Path] = None) -> None:
     log.info("skills.draft_discarded", name=name)
 
 
+#: A domain worth keeping is described in more than a handful of words. Below
+#: this, what came back is a restatement of the request rather than a field.
+_MIN_TRIGGERS = 6
+_MIN_DESCRIPTION_WORDS = 8
+
+
+def _too_thin(skill: Skill, intent: str) -> str:
+    """Why this proposal should not be installed, or "" if it should.
+
+    Written against a real failure. Given "which classes are the most popular
+    with members", ``openai/gpt-oss-120b`` returned name ``classes``,
+    description "the most popular classes among members", and three triggers —
+    a description of the question, not of a field. Installed, its ``classes``
+    trigger then matched every later request that mentioned a class.
+
+    The tests keep both directions, because a gate that also refuses a good
+    description turns "works on any domain" into "works on none".
+    """
+    # Not "is the name a word in the request". A field's name legitimately
+    # appears in a request about it -- "a **gym** membership system", "my
+    # **insurance** policy" -- and rejecting those would refuse most of the
+    # good ones. What separated the bad case was its thinness, not its name:
+    # three triggers and a six-word description lifted from the question.
+    if len(skill.triggers) < _MIN_TRIGGERS:
+        return f"only {len(skill.triggers)} triggers; a field has more vocabulary"
+    if len(skill.description.split()) < _MIN_DESCRIPTION_WORDS:
+        return "the description is too short to be about a field"
+    if skill.description.strip().lower() in intent.strip().lower():
+        return "the description restates the request"
+    return ""
+
+
+def ensure(
+    intent: str,
+    *,
+    backend=None,
+    local_only: bool = False,
+    directory: Optional[Path] = None,
+) -> tuple[Optional[Skill], bool]:
+    """A skill for this intent — the one that already fits, or a new one.
+
+    This is what makes the system work on a domain nobody anticipated. Four
+    skills shipped; a request about a library, a gym or a restaurant matched
+    none of them and got the generic specialist, and a build of one was refused
+    outright. Now the first such request writes the domain down, and **every
+    request after it reuses that** — which is the half that matters, because a
+    system that re-derives the same domain on every question has not learned
+    anything.
+
+    Returns the skill and whether it had to be created.
+
+    **An existing skill always wins.** Matching runs first and a hit returns
+    immediately, so a hand-written file is never shadowed by a generated one,
+    and near-duplicates do not accumulate: once "a cafe ordering system" has
+    produced ``barista``, "coffee shop orders" matches it rather than writing
+    ``cafe`` beside it.
+
+    On what this does and does not risk. The intent is the user's own words,
+    not something fetched from a page, and every guard on a drafted skill still
+    holds: ``requires`` is forced to read, so a generated skill cannot reach
+    the network or write to the corpus, and every tool name is checked against
+    the registry. What a bad generation can produce is a worse prompt, not a
+    wider permission. It is marked ``generated`` so it can be found and deleted.
+
+    Off by ``SKILLS_AUTO_CREATE`` for anyone who would rather approve each one
+    by hand; then this returns ``(None, False)`` and the caller falls back to
+    the generic specialist exactly as before.
+    """
+    from pipeline.skills.match import match as match_intent
+
+    text = (intent or "").strip()
+    if not text:
+        return None, False
+
+    try:
+        found = match_intent(text)
+    except Exception as exc:
+        log.warning("skills.match_failed", error=repr(exc))
+        found = None
+
+    if found is not None and found.skill is not None:
+        return found.skill, False
+
+    if not config.SKILLS_AUTO_CREATE:
+        return None, False
+
+    try:
+        drafted = draft(text, backend=backend, local_only=local_only, generated=True)
+    except Exception as exc:
+        # A conversation must not fail because a domain could not be described.
+        # The generic specialist is the floor, and it is a working one.
+        log.warning("skills.auto_create_failed", intent=text[:80], error=repr(exc))
+        metrics.incr("skills.auto_create.failed")
+        return None, False
+
+    problem = _too_thin(drafted.skill, text)
+    if problem:
+        # Better no skill than a bad one. A skill named after a word in the
+        # question does not describe a domain, and its triggers then hijack
+        # every later request containing that word -- measured: a `classes`
+        # skill, written from "which classes are most popular", matched
+        # anything mentioning a class.
+        log.warning(
+            "skills.auto_create_rejected",
+            name=drafted.skill.name,
+            intent=text[:80],
+            reason=problem,
+        )
+        metrics.incr("skills.auto_create.rejected")
+        return None, False
+
+    root = directory or loader.skills_dir()
+    destination = root / drafted.skill.name / loader.SKILL_FILE
+    if destination.exists():
+        # Two requests raced, or the model chose a name already taken by a
+        # hand-written skill. The file on disk wins either way.
+        log.info("skills.auto_create_exists", name=drafted.skill.name)
+        from pipeline.skills import reset
+
+        reset()
+        try:
+            return loader.get(drafted.skill.name, root), False
+        except SkillError:
+            return drafted.skill, False
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(drafted.text, encoding="utf-8")
+
+    from pipeline.skills import reset
+
+    # Both caches: the parsed skills, and the description vectors the matcher
+    # compares against. Without the second, the skill just written is invisible
+    # to the next intent that should match it.
+    reset()
+
+    log.info(
+        "skills.auto_created",
+        name=drafted.skill.name,
+        intent=text[:80],
+        agents=len(drafted.skill.agents),
+    )
+    metrics.incr("skills.auto_created")
+    return drafted.skill, True
+
+
 __all__ = [
     "Drafted",
     "approve",
+    "ensure",
     "discard",
     "draft",
     "list_drafts",
