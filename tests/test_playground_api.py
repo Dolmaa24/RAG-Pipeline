@@ -275,3 +275,97 @@ def test_the_supervisor_hands_history_to_its_specialist():
     ).investigate("the new one")
 
     assert any(m.content == "earlier" for m in seen["messages"])
+
+
+# --- what decides a turn ----------------------------------------------------
+
+
+def test_the_breakdown_carries_both_decisions():
+    """Path and domain are read together — "answered directly, as the insurance
+    specialist" is the sentence, and either half alone explains nothing."""
+    from playground.threads import breakdown
+
+    decided = breakdown("which policies cover physiotherapy")
+    assert decided["path"] == "investigate"
+    assert decided["skill"] == "insurance"
+    assert decided["skill_how"] == "trigger"
+    assert "corpus_profile" in decided["tools"]
+
+
+def test_the_breakdown_names_the_declared_roster():
+    """What the side panel shows as agents created, as distinct from run."""
+    from playground.threads import breakdown
+
+    decided = breakdown("the exam timetable for this term")
+    assert decided["buildable"] is True
+    assert [a["name"] for a in decided["agents"]] == [
+        "registrar", "timetable", "attendance", "examiner"
+    ]
+
+
+def test_an_unmatched_question_still_produces_a_breakdown():
+    """No skill is a normal outcome, not a missing one."""
+    from playground.threads import breakdown
+
+    decided = breakdown("what is the revenue", allow_embedding=False)
+    assert decided["skill"] is None
+    assert decided["path"] == "answer"
+
+
+def test_the_request_path_never_embeds(client, queued, monkeypatch):
+    """The security-adjacent one for latency: an HTTP handler loading a 130 MB
+    model puts ten seconds in front of the first message anybody sends."""
+    from pipeline.embed import dense
+
+    def explode(*args, **kwargs):
+        raise AssertionError("the API loaded the embedder")
+
+    monkeypatch.setattr(dense, "get_dense_embedder", explode)
+    thread = client.post("/api/v1/threads", json={}).json()["thread"]
+    response = client.post(
+        f"/api/v1/threads/{thread['id']}/messages",
+        json={"content": "something with no trigger word at all"},
+    )
+    assert response.status_code == 202
+    assert response.json()["breakdown"]["skill_how"] == "undecided"
+
+
+def test_a_trigger_match_is_reported_immediately(client, queued):
+    """Free, so there is no reason to make the caller wait for it."""
+    thread = client.post("/api/v1/threads", json={}).json()["thread"]
+    body = client.post(
+        f"/api/v1/threads/{thread['id']}/messages",
+        json={"content": "which policies cover physiotherapy"},
+    ).json()
+    assert body["breakdown"]["skill"] == "insurance"
+
+
+def test_the_matched_skill_composes_the_specialist(tmp_path, monkeypatch):
+    """The integration. Without this the Playground is skill-blind and the
+    panel has nothing to show."""
+    monkeypatch.setattr(config, "PLAYGROUND_DB_PATH", str(tmp_path / "pg.db"))
+    store.reset_cache()
+
+    from playground import threads
+
+    seen: dict = {}
+
+    class FakeSupervisor:
+        def investigate(self, question):
+            class R:
+                answer, sufficient = "done", True
+                sources: list = []
+                trace = [{"kind": "specialist", "role": "insurance"}]
+                warnings: list = []
+
+            return R()
+
+    thread = store.create_thread()
+    store.append_message(thread.id, "user", "which policies cover physiotherapy")
+    result = threads.reply(
+        thread.id, "which policies cover physiotherapy", supervisor=FakeSupervisor()
+    )
+
+    assert result.message.meta["skill"] == "insurance"
+    assert result.message.meta["ran"] == ["insurance"]
+    store.reset_cache()

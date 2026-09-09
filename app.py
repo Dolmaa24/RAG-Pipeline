@@ -964,6 +964,10 @@ def _queue_reply(thread_id: str, content: str, local_only: bool) -> dict:
     from tasks import playground_reply
 
     stored = threads.start_turn(thread_id, content)
+    # No embedding in an HTTP handler. A trigger match is free; anything that
+    # needs the vector comparison is settled in the worker, where the embedder
+    # is already resident, rather than loading 130 MB into this process.
+    decided = threads.breakdown(content, allow_embedding=False)
     try:
         task = playground_reply.delay(thread_id, content, local_only=local_only)
     except Exception as exc:
@@ -974,9 +978,11 @@ def _queue_reply(thread_id: str, content: str, local_only: bool) -> dict:
         "task_id": task.id,
         "thread_id": thread_id,
         "message_id": stored.id,
-        # From route.py, with no model call, so the caller can say "thinking"
-        # or "this takes a minute" before anything comes back.
-        "path": threads.plan(content),
+        # Decided before any model runs, so the interface can show what will
+        # happen — the path, the domain, the specialist — rather than one
+        # spinner for a five-second answer and a two-minute loop.
+        "path": decided["path"],
+        "breakdown": decided,
         "poll": f"/api/v1/threads/{thread_id}/replies/{task.id}",
     }
 

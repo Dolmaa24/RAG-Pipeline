@@ -66,6 +66,8 @@ class Match:
     def explain(self) -> str:
         if self.skill is None:
             return "no skill matched; the generic corpus specialist will run"
+        if self.how == "undecided":
+            return "no trigger word fired; the domain is decided when the run starts"
         if self.how == "explicit":
             return f"{self.skill.name} was named in the request"
         if self.how == "trigger":
@@ -182,6 +184,7 @@ def match(
     skill: Optional[str] = None,
     skills: Optional[dict[str, Skill]] = None,
     embedder=None,
+    allow_embedding: bool = True,
 ) -> Match:
     """Which skill should handle ``intent``.
 
@@ -189,6 +192,13 @@ def match(
     wrong and a person is correcting it. An unknown name raises, because a
     caller who asked for a particular skill should be told it does not exist
     rather than quietly given a different one.
+
+    ``allow_embedding=False`` stops before the vector comparison and returns
+    ``how="undecided"`` when no trigger fired. That is for a caller that must
+    not pay for the embedder: the API process has no reason to hold a 130 MB
+    model, and loading one inside an HTTP handler would put ten seconds in
+    front of the first message anybody sends. The worker, where the embedder is
+    already warm, settles it.
     """
     available = load_all() if skills is None else skills
 
@@ -215,6 +225,9 @@ def match(
         metrics.incr("skills.match.trigger")
         log.info("skills.matched", skill=name, how="trigger", score=score)
         return Match(available[name], confidence=score, how="trigger", runners_up=ranked[1:4])
+
+    if not allow_embedding:
+        return Match(None, how="undecided", runners_up=ranked[:4])
 
     try:
         similarity = _embedding_scores(text, available, embedder)

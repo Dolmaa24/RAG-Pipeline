@@ -11,6 +11,17 @@ question's own words and with no model call, and it was benchmarked over
 thirteen questions to make that choice. A conversation is exactly where its
 bias matters: most turns are ordinary lookups that should come back in seconds,
 and the loop earns its four-fold latency only on questions asking for a set.
+
+**Every turn is also matched to a domain.** ``pipeline.skills.match`` reads the
+message and picks the skill whose vocabulary it belongs to, again without a
+model call, and the matched skill composes the specialist that answers. A turn
+that matches nothing runs the generic corpus role — which is what every
+question got before skills existed, so the floor is unchanged.
+
+Both decisions are recorded on the stored message rather than left in a log.
+A conversation with two speeds and a rotating cast of specialists is
+unreadable if you cannot see, per answer, what decided it — so the breakdown
+travels with the message and the interface renders it.
 """
 
 from __future__ import annotations
@@ -60,6 +71,53 @@ def plan(question: str) -> str:
     return route(question).path
 
 
+def breakdown(question: str, *, allow_embedding: bool = True) -> dict[str, Any]:
+    """Everything decided about a message before any model is called.
+
+    Two routing decisions and no model between them, which is what makes this
+    cheap enough to run before the work starts and show to the caller: the
+    path from ``route``, and the domain from ``match``. Returned as one object
+    because they are read together — "answered directly, as the insurance
+    specialist" is the sentence, and either half alone explains nothing.
+    """
+    from pipeline.agents.route import route
+
+    decision = route(question)
+    found = _match(question, allow_embedding=allow_embedding)
+    skill = found.skill if found else None
+
+    return {
+        "path": decision.path,
+        "why_path": decision.reason,
+        "skill": skill.name if skill else None,
+        "skill_how": found.how if found else "none",
+        "skill_confidence": round(found.confidence, 3) if found else 0.0,
+        "why_skill": found.explain() if found else "skills are off",
+        "runners_up": [
+            {"skill": name, "score": round(score, 3)}
+            for name, score in (found.runners_up if found else [])
+        ],
+        "tools": list(skill.tools) if skill else [],
+        "agents": [agent.to_dict() for agent in skill.agents] if skill else [],
+        "buildable": bool(skill and skill.buildable),
+    }
+
+
+def _match(question: str, *, allow_embedding: bool = True):
+    """The matched skill, or None when skills are off or unavailable.
+
+    Never raises. A conversation must not fail because a skill file was being
+    edited while someone was typing.
+    """
+    try:
+        from pipeline.skills import match as match_intent
+
+        return match_intent(question, allow_embedding=allow_embedding)
+    except Exception as exc:
+        log.warning("playground.match_failed", error=repr(exc))
+        return None
+
+
 def start_turn(
     thread_id: str, content: str, *, path: Optional[Path] = None
 ) -> store.Message:
@@ -97,7 +155,8 @@ def reply(
     import time
 
     started = time.perf_counter()
-    chosen = plan(question)
+    decided = breakdown(question)
+    chosen = decided["path"]
     hydration = context.hydrate(thread_id, path=path)
 
     # Summarise before answering, so what the answer sees includes anything
@@ -108,11 +167,16 @@ def reply(
         )
 
     if on_progress:
-        on_progress({"stage": chosen, "replayed": len(hydration.messages)})
+        on_progress({
+            "stage": chosen,
+            "skill": decided["skill"],
+            "replayed": len(hydration.messages),
+        })
 
     if chosen == "investigate":
         result = _investigate(
             thread_id, question, hydration,
+            skill=decided["skill"],
             local_only=local_only, on_progress=on_progress, supervisor=supervisor,
         )
     else:
@@ -126,11 +190,19 @@ def reply(
         "assistant",
         answer_text or "I could not produce an answer for that.",
         meta={
-            "path": chosen,
+            **decided,
             "sufficient": sufficient,
             "sources": sources,
             "replayed": len(hydration.messages),
             "summarised": bool(hydration.summary),
+            # Which specialists actually ran, as opposed to which the skill
+            # declares. They differ: acquisition joins a run that needed it,
+            # and a worker the roster names may never have been reached.
+            "ran": [
+                step.get("role")
+                for step in trace
+                if step.get("kind") == "specialist" and step.get("role")
+            ],
         },
         path=path,
     )
@@ -139,6 +211,7 @@ def reply(
         "playground.replied",
         thread=thread_id,
         path=chosen,
+        skill=decided["skill"],
         replayed=len(hydration.messages),
         sources=len(sources),
         seconds=round(time.perf_counter() - started, 1),
@@ -156,12 +229,26 @@ def reply(
     )
 
 
-def _investigate(thread_id, question, hydration, *, local_only, on_progress, supervisor):
-    """The loop, with the thread's history in the specialist's messages."""
+def _investigate(
+    thread_id, question, hydration, *, skill, local_only, on_progress, supervisor
+):
+    """The loop, with the thread's history and the domain's own specialist."""
     from pipeline.agents.supervisor import Supervisor
+
+    role = None
+    if skill:
+        try:
+            from pipeline.skills import get as get_skill
+
+            role = get_skill(skill).as_role()
+        except Exception as exc:
+            # The generic specialist is a worse answer than the right one and a
+            # much better one than a failed turn.
+            log.warning("playground.skill_unavailable", skill=skill, error=repr(exc))
 
     runner = supervisor or Supervisor(
         local_only=local_only,
+        role=role,
         history=hydration.as_messages(),
         on_progress=on_progress,
     )
@@ -201,4 +288,4 @@ def _answer(question, hydration, *, local_only, answerer):
     )
 
 
-__all__ = ["Reply", "in_flight", "plan", "reply", "start_turn"]
+__all__ = ["Reply", "breakdown", "in_flight", "plan", "reply", "start_turn"]
