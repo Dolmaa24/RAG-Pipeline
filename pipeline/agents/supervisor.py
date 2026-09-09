@@ -103,6 +103,7 @@ class Supervisor:
         max_rounds: Optional[int] = None,
         verify_answer: Optional[bool] = None,
         role: Optional[Role] = None,
+        history: Optional[list] = None,
         backend=None,
         answerer=None,
         on_progress=None,
@@ -121,6 +122,10 @@ class Supervisor:
         #: everything else keeps the generic corpus role, which is what a run
         #: with no matching skill gets and what every existing caller gets.
         self._role = role or CORPUS
+        #: Earlier conversation, for a run that continues a thread rather than
+        #: starting one. Handed to the specialist; the synthesis step retrieves
+        #: for itself and takes its context through the question instead.
+        self._history = history or []
         self._backend = backend
         self._answerer = answerer
         #: Called with one dict per completed step. A run takes half a minute
@@ -184,7 +189,7 @@ class Supervisor:
             "round": state.get("rounds", 0) + 1,
             "task": task,
         })
-        result = loop.run(prompt)
+        result = loop.run(prompt, history=self._history)
         self._spend.iterations += result.spend.iterations if result.spend else 0
         self._spend.tool_calls += result.spend.tool_calls if result.spend else 0
         self._warnings.extend(result.warnings)

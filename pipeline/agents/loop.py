@@ -304,8 +304,21 @@ class AgentLoop:
 
         return [invoke(request.name, request.arguments, allowed=allowed) for request in requests]
 
-    def run(self, question: str) -> LoopResult:
-        """Answer one question, spending no more than the budget allows."""
+    def run(
+        self, question: str, history: Optional[list[Message]] = None
+    ) -> LoopResult:
+        """Answer one question, spending no more than the budget allows.
+
+        ``history`` is earlier conversation to answer in the light of. It goes
+        after the system prompt and before the new question — the role's
+        instructions still lead, and the thing actually being asked is still
+        last, which are the two positions a model weights most. Callers that
+        pass nothing get exactly the behaviour they had.
+
+        The caller decides what fits: this does not truncate. A whole thread
+        handed over here would overflow the context window, and
+        ``playground.context`` is what keeps that within budget.
+        """
         question = (question or "").strip()
         if not question:
             return LoopResult(question="", stopped="empty question")
@@ -316,7 +329,11 @@ class AgentLoop:
 
         started = time.perf_counter()
         state: LoopState = {
-            "messages": [Message.system(self.system), Message.user(question)],
+            "messages": [
+                Message.system(self.system),
+                *(history or []),
+                Message.user(question),
+            ],
             "trace": [],
             "answer": "",
             "stopped": "",
