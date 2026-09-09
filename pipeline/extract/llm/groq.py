@@ -108,14 +108,22 @@ class GroqBackend:
         client = self._get_client()
         started = time.perf_counter()
         try:
-            completion = client.chat.completions.create(
-                model=self.model,
-                messages=[_wire(message) for message in messages],
-                tools=[_as_groq_tool(tool) for tool in tools] or None,
-                tool_choice=tool_choice if tools else None,
-                temperature=0.0,
-                max_tokens=config.GROQ_MAX_OUTPUT_TOKENS,
-            )
+            # ``tool_choice`` is omitted entirely when there are no tools, not
+            # sent as None. Groq rejects a null with "Only allowed string values
+            # for 'tool_choice' are [none, auto, required]" -- so the toolless
+            # turn, which is how the agent loop asks for a final answer once the
+            # budget is spent, failed with a 400 on the one call whose whole job
+            # is to salvage something from a run that has already cost a minute.
+            request: dict = {
+                "model": self.model,
+                "messages": [_wire(message) for message in messages],
+                "temperature": 0.0,
+                "max_tokens": config.GROQ_MAX_OUTPUT_TOKENS,
+            }
+            if tools:
+                request["tools"] = [_as_groq_tool(tool) for tool in tools]
+                request["tool_choice"] = tool_choice
+            completion = client.chat.completions.create(**request)
         except Exception as exc:
             raise self._classify(exc) from exc
 

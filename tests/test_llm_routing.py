@@ -189,3 +189,67 @@ def test_the_cascade_defaults_to_bulk_for_everything_else(monkeypatch, backends)
 
     assert cascade._get_backend(False).name == "ollama"          # tier 3
     assert cascade._get_backend(False, role=llm.SELECTOR).name == "groq"
+
+
+def test_a_toolless_groq_turn_omits_tool_choice_entirely():
+    """The finish node calls with no tools, and Groq rejects a null tool_choice
+    with "Only allowed string values are [none, auto, required]".
+
+    That call is how the loop salvages an answer from a run whose budget is
+    spent, so a 400 there loses the whole minute the run already cost. Sending
+    the key with a null was the bug; omitting it is the fix.
+    """
+    from pipeline.extract.llm.base import Message
+    from pipeline.extract.llm.groq import GroqBackend
+
+    sent: dict = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            raise RuntimeError("stop here; the request is what is under test")
+
+    class FakeClient:
+        chat = type("chat", (), {"completions": FakeCompletions()})()
+
+    backend = GroqBackend.__new__(GroqBackend)
+    backend.model = "openai/gpt-oss-120b"
+    backend.name = "groq"
+    backend._get_client = lambda: FakeClient()
+
+    try:
+        backend.complete_with_tools(messages=[Message.user("hi")], tools=[])
+    except Exception:
+        pass
+
+    assert "tool_choice" not in sent
+    assert "tools" not in sent
+
+
+def test_a_groq_turn_with_tools_still_sends_the_choice():
+    from pipeline.extract.llm.base import Message
+    from pipeline.extract.llm.groq import GroqBackend
+
+    sent: dict = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            sent.update(kwargs)
+            raise RuntimeError("stop here")
+
+    class FakeClient:
+        chat = type("chat", (), {"completions": FakeCompletions()})()
+
+    backend = GroqBackend.__new__(GroqBackend)
+    backend.model = "openai/gpt-oss-120b"
+    backend.name = "groq"
+    backend._get_client = lambda: FakeClient()
+
+    tool = {"name": "t", "description": "d", "input_schema": {"type": "object", "properties": {}}}
+    try:
+        backend.complete_with_tools(messages=[Message.user("hi")], tools=[tool], tool_choice="required")
+    except Exception:
+        pass
+
+    assert sent["tool_choice"] == "required"
+    assert len(sent["tools"]) == 1
