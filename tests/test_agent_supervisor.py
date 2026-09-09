@@ -460,3 +460,71 @@ def test_the_schema_hint_names_the_same_key_as_the_schema():
         f"schema_hint asks for {hinted}, schema offers {set(_SCHEMA['properties'])}"
     )
     assert set(_SCHEMA["required"]) <= set(captured["schema_hint"])
+
+
+# --- a skill as the gathering specialist -----------------------------------
+
+
+def test_the_gathering_specialist_defaults_to_the_corpus_role():
+    """Every existing caller passes no role and must be unaffected."""
+    assert _supervisor(Reply()).\
+        _role is CORPUS
+
+
+def test_a_supplied_role_gathers_instead():
+    from pipeline.skills.loader import parse
+
+    skill = parse(
+        "---\nname: demo\ndescription: A test domain.\n"
+        "tools: [search_corpus]\n---\n\nYou are the demo specialist.\n"
+    )
+    supervisor = _supervisor(Reply(), role=skill.as_role())
+    assert supervisor._role.name == "demo"
+
+
+def test_the_supplied_role_reaches_the_specialist_loop():
+    """The role decides the prompt and the tool subset. A role that is stored
+    and never used would pass the test above and change nothing."""
+    from pipeline.skills.loader import parse
+
+    skill = parse(
+        "---\nname: demo\ndescription: A test domain.\n"
+        "tools: [search_corpus]\n---\n\nYou are the demo specialist.\n"
+    )
+    supervisor = _supervisor(
+        Reply(_answer("done", sufficient=True)), role=skill.as_role()
+    )
+
+    seen: list[str] = []
+
+    def report(event):
+        if event.get("stage") == "gather":
+            seen.append(event["role"])
+
+    supervisor._on_progress = report
+    supervisor.investigate("anything")
+    assert seen == ["demo"]
+
+
+def test_a_skill_replaces_the_gatherer_and_not_the_fetcher():
+    """Acquisition carries the write effect. If a skill's role stood in for it
+    too, a file in a folder would be choosing the prompt that reaches the
+    network — so the skill gathers and ACQUISITION still fetches."""
+    from pipeline.skills.loader import parse
+
+    skill = parse(
+        "---\nname: demo\ndescription: A test domain.\n"
+        "tools: [search_corpus]\n---\n\nYou are the demo specialist.\n"
+    )
+    answerer = Reply(*[_answer("no", sufficient=False) for _ in range(5)])
+    result = _supervisor(
+        answerer,
+        role=skill.as_role(),
+        max_rounds=3,
+        budget=Budget(network_calls=2, write_calls=2),
+    ).investigate("summarise https://example.com/report")
+
+    roles = [step["role"] for step in result.trace if step["kind"] == "specialist"]
+    assert "acquisition" in roles
+    assert "demo" in roles
+    assert "corpus" not in roles

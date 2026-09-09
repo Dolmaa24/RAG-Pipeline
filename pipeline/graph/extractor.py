@@ -133,6 +133,7 @@ class GraphExtractor:
         source_url: str = "",
         content_hash: str = "",
         local_only: bool = False,
+        guidance: str = "",
     ) -> KnowledgeGraphExtraction:
         """Build a graph from the whole document, not just the front of it.
 
@@ -161,8 +162,12 @@ class GraphExtractor:
         # The cache key names the prompt, and the two paths ask different
         # questions — a cached whole-graph extraction must not be served to a
         # relationships-only request or the other way round.
+        # ``guidance`` names a domain's entity and relation types, and asking
+        # a different question of the same text must not be answered from the
+        # cache of the previous one. It belongs in the key for the same reason
+        # the two prompts above do.
         use_gliner = config.GRAPH_ENTITY_BACKEND == "gliner"
-        prompt_key = _RELATIONS_PROMPT if use_gliner else _PROMPT
+        prompt_key = (_RELATIONS_PROMPT if use_gliner else _PROMPT) + guidance
 
         cached = self.cache.get(key, prompt_key, model)
         if cached is not None:
@@ -179,12 +184,13 @@ class GraphExtractor:
                 use_gliner=use_gliner,
                 source_url=source_url,
                 content_hash=content_hash,
+                guidance=guidance,
             )
             if part is None:
                 # GLiNER unavailable on the first window: redo the whole
                 # document the all-in-one way rather than mixing two shapes.
                 use_gliner = False
-                prompt_key = _PROMPT
+                prompt_key = _PROMPT + guidance
                 cached = self.cache.get(key, prompt_key, model)
                 if cached is not None:
                     return cached
@@ -194,6 +200,7 @@ class GraphExtractor:
                     use_gliner=False,
                     source_url=source_url,
                     content_hash=content_hash,
+                    guidance=guidance,
                 )
             if part is None:
                 continue
@@ -231,17 +238,22 @@ class GraphExtractor:
         use_gliner: bool,
         source_url: str,
         content_hash: str,
+        guidance: str = "",
     ) -> Optional[KnowledgeGraphExtraction]:
         """One window. ``None`` means GLiNER was asked for and is unavailable."""
         if use_gliner:
             return self._with_gliner(
-                window, backend, source_url=source_url, content_hash=content_hash
+                window,
+                backend,
+                source_url=source_url,
+                content_hash=content_hash,
+                guidance=guidance,
             )
 
         try:
             with metrics.timer("graph.extract"):
                 response = backend.complete_json(
-                    prompt=_PROMPT,
+                    prompt=_PROMPT + guidance,
                     content=window,
                     schema_hint=_SCHEMA_HINT,
                     json_schema=_JSON_SCHEMA,
@@ -268,6 +280,7 @@ class GraphExtractor:
         *,
         source_url: str,
         content_hash: str,
+        guidance: str = "",
     ) -> Optional[KnowledgeGraphExtraction]:
         """Entities from GLiNER, relationships from the model.
 
@@ -299,7 +312,7 @@ class GraphExtractor:
         try:
             with metrics.timer("graph.extract_relations"):
                 response = backend.complete_json(
-                    prompt=_RELATIONS_PROMPT.format(entities=listing),
+                    prompt=_RELATIONS_PROMPT.format(entities=listing) + guidance,
                     content=text[: config.MAX_CHUNK_SIZE],
                     schema_hint=_RELATIONS_SCHEMA_HINT,
                     json_schema=_RELATIONS_JSON_SCHEMA,

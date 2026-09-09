@@ -106,6 +106,56 @@ def test_the_second_extraction_makes_no_model_call(fake_backend):
     assert len(second.relationships) == len(first.relationships)
 
 
+def test_a_domain_guidance_is_part_of_the_key(fake_backend):
+    """Two skills ask different questions of the same paragraph.
+
+    The insurance pack asks for policies and exclusions; the school pack asks
+    for programmes and subjects. Without the guidance in the key the second
+    domain is served the first domain's answer, and the mistake is invisible —
+    a plausible graph, extracted for somebody else.
+    """
+    backend = fake_backend(PAYLOAD)
+    extractor = GraphExtractor(backend=backend, cache=GraphCache())
+
+    extractor.extract(TEXT, source_url="u", content_hash="h1", guidance="entities: Policy")
+    extractor.extract(TEXT, source_url="u", content_hash="h1", guidance="entities: Subject")
+
+    assert backend.calls == 2
+
+
+def test_the_same_guidance_still_hits_the_cache(fake_backend):
+    """Or every skilled extraction would pay full price on every re-crawl."""
+    backend = fake_backend(PAYLOAD)
+    extractor = GraphExtractor(backend=backend, cache=GraphCache())
+
+    extractor.extract(TEXT, source_url="u", content_hash="h1", guidance="entities: Policy")
+    extractor.extract(TEXT, source_url="u", content_hash="h1", guidance="entities: Policy")
+
+    assert backend.calls == 1
+
+
+def test_no_guidance_extracts_what_it_always_did(fake_backend):
+    """The default path is untouched: a caller naming no skill gets the same
+    prompt, the same key and the same graph as before skills existed."""
+    backend = fake_backend(PAYLOAD)
+    extractor = GraphExtractor(backend=backend, cache=GraphCache())
+
+    extractor.extract(TEXT, source_url="u", content_hash="h1")
+    extractor.extract(TEXT, source_url="u", content_hash="h1", guidance="")
+
+    assert backend.calls == 1
+
+
+def test_the_guidance_reaches_the_model(fake_backend):
+    """Keying on it is only half the job; the model has to be told."""
+    backend = fake_backend(PAYLOAD)
+    extractor = GraphExtractor(backend=backend, cache=GraphCache())
+    extractor.extract(TEXT, source_url="u", content_hash="h1", guidance="entities: Policy")
+
+    assert "entities: Policy" in backend.last_prompt
+    assert "Extract a knowledge graph" in backend.last_prompt
+
+
 def test_changed_text_is_extracted_again(fake_backend):
     backend = fake_backend(PAYLOAD)
     extractor = GraphExtractor(backend=backend, cache=GraphCache())

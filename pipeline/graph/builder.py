@@ -51,6 +51,7 @@ def build_graph(
     source_url: str = "",
     content_hash: str = "",
     local_only: bool = False,
+    skill: Optional[str] = None,
     database=None,
     extractor=None,
     resolver=None,
@@ -82,7 +83,11 @@ def build_graph(
 
     stage = time.perf_counter()
     extraction = extractor.extract(
-        text, source_url=source_url, content_hash=content_hash, local_only=local_only
+        text,
+        source_url=source_url,
+        content_hash=content_hash,
+        local_only=local_only,
+        guidance=_guidance(skill),
     )
     report.timings_ms["extract"] = round((time.perf_counter() - stage) * 1000, 2)
     report.entities_extracted = len(extraction.entities)
@@ -132,6 +137,26 @@ def build_graph(
         ms=report.timings_ms["total"],
     )
     return report
+
+
+def _guidance(skill: Optional[str]) -> str:
+    """The named skill's entity and relation types, as prompt text.
+
+    A missing or unknown skill is not an error here. The graph this produces is
+    the untyped one the pipeline built before skills existed, which is a worse
+    graph than the domain-aware one and a perfectly usable one — losing a
+    document's entities entirely because its skill file was renamed would not
+    be.
+    """
+    if not skill:
+        return ""
+    try:
+        from pipeline.skills import get
+
+        return get(skill).graph_guidance()
+    except Exception as exc:
+        log.warning("graph.skill_unavailable", skill=skill, error=repr(exc))
+        return ""
 
 
 __all__ = ["GraphBuildReport", "build_graph"]

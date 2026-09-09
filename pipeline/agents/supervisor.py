@@ -102,6 +102,7 @@ class Supervisor:
         local_only: bool = False,
         max_rounds: Optional[int] = None,
         verify_answer: Optional[bool] = None,
+        role: Optional[Role] = None,
         backend=None,
         answerer=None,
         on_progress=None,
@@ -116,6 +117,10 @@ class Supervisor:
         self.verify_answer = (
             config.AGENT_VERIFY if verify_answer is None else verify_answer
         )
+        #: The specialist that gathers. A skill composes one from its file;
+        #: everything else keeps the generic corpus role, which is what a run
+        #: with no matching skill gets and what every existing caller gets.
+        self._role = role or CORPUS
         self._backend = backend
         self._answerer = answerer
         #: Called with one dict per completed step. A run takes half a minute
@@ -141,7 +146,9 @@ class Supervisor:
         return graph.compile()
 
     def _gather(self, state: _State) -> _State:
-        return self._run_specialist(state, CORPUS, state.get("focus") or state["question"])
+        return self._run_specialist(
+            state, self._role, state.get("focus") or state["question"]
+        )
 
     def _acquire(self, state: _State) -> _State:
         urls = _URL.findall(state["question"])

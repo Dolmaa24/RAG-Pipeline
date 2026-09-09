@@ -104,6 +104,7 @@ class FakeBackend:
         self._raises = raises
         self.calls = 0
         self.last_content = None
+        self.last_prompt = None
 
     def available(self) -> bool:
         return True
@@ -111,6 +112,7 @@ class FakeBackend:
     def complete_json(self, *, prompt, content, schema_hint, json_schema):
         self.calls += 1
         self.last_content = content
+        self.last_prompt = prompt
         if self._raises is not None:
             raise self._raises
         return SimpleNamespace(data=self._data, backend=self.name, model=self.model)

@@ -169,6 +169,12 @@ class EngineConfig(BaseSettings):
     #: the pipeline to spend a hosted model, and the one where a 3B model's
     #: habit of inventing attributes costs the most. Unset follows LLM_BACKEND.
     LLM_SELECTOR_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
+    #: Which backend writes generated source. Defaults to the hosted model
+    #: rather than following LLM_BACKEND, and that is the one place in this
+    #: project where the hosted default is the right one: a 3B model on an 8 GB
+    #: machine does not write a coherent multi-file application, and the whole
+    #: output of a build is judged on whether the files compose.
+    LLM_CODE_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = "groq"
     #: The agent loop's ceiling. These are not a safety net: the tool-calling
     #: benchmark found the local models never decide they are finished, so the
     #: turn limit is what ends a run. See pipeline/agents/budget.py.
@@ -209,6 +215,58 @@ class EngineConfig(BaseSettings):
     #: so the first investigation does not pay 10s for it. Safe here where the
     #: same preload is not safe on the cpu worker — see celery_app.py.
     AGENT_WARM_EMBEDDER: bool = True
+    #: Domain packs in skills/, one SKILL.md each: a prompt, a tool subset, an
+    #: extraction schema and the entity types that domain uses. Off means the
+    #: system behaves as it did before them — the generic corpus specialist on
+    #: every intent — which is also what a task with no matching skill gets.
+    SKILLS_ENABLED: bool = True
+    #: Relative paths resolve against the repository root, not the working
+    #: directory, so a worker started from anywhere reads the same folder.
+    SKILLS_DIR: str = "skills"
+    #: A floor on the raw similarity, and a guard rather than the real test.
+    #: Measured over BGE-small: five domain intents carrying no trigger word
+    #: scored 0.480-0.672 against their own skill, and six deliberately generic
+    #: questions scored 0.508-0.620 against their nearest. The two ranges
+    #: overlap completely, so an absolute threshold separates nothing on its
+    #: own -- this only catches an intent that resembles no skill at all.
+    SKILLS_MIN_SIMILARITY: float = 0.45
+    #: How far the best skill must lead the second, which is the test that
+    #: does the work. Over the same measurement, domain intents led by
+    #: 0.022-0.132 and generic ones by 0.009-0.062. At 0.08 every generic
+    #: question is correctly refused and three of the five domain intents are
+    #: refused with them -- deliberately biased that way, because the refusal
+    #: costs the generic specialist, which answers those adequately, while a
+    #: wrong skill hands the agent a prompt about the wrong domain. Trigger
+    #: words, not this, are what routes an intent that names its domain.
+    SKILLS_MIN_MARGIN: float = 0.08
+    #: Where a synthesized skill waits for a person to read it. Relative to
+    #: SKILLS_DIR, and skipped by the loader: a draft is a model's proposal for
+    #: an agent's own system prompt, and nothing writes one of those into the
+    #: live set without a human in between.
+    SKILLS_DRAFTS_DIR: str = "_drafts"
+
+    #: The build workflow writes source files and, when separately allowed,
+    #: runs them. Off until asked for -- every other feature here reads.
+    BUILD_ENABLED: bool = False
+    #: Where generated projects go. Relative paths resolve against the
+    #: repository root, and the directory is gitignored.
+    BUILD_WORKSPACE: str = "workspace"
+    #: Caps on one build. A model that has misunderstood the task fails by
+    #: producing many files or one enormous one, and both are cheap to bound.
+    BUILD_MAX_FILES: int = 30
+    BUILD_MAX_FILE_BYTES: int = 60_000
+    #: Wall clock for the generated test run, after which the subprocess is
+    #: killed. Generated tests hang -- an infinite loop is one of the more
+    #: common things a model writes by accident.
+    BUILD_TEST_TIMEOUT: float = 60.0
+    #: CPU seconds and address space for that subprocess, so a runaway test
+    #: cannot take the machine down before the wall clock notices.
+    BUILD_TEST_CPU_SECONDS: int = 30
+    BUILD_TEST_MEMORY_MB: int = 1024
+    #: How many source files one build may write, as a budget counter. It is
+    #: also the permission: zero means the writing tools are absent entirely.
+    BUILD_CODE_CALLS: int = 20
+    BUILD_EXECUTE_CALLS: int = 3
     AI_TIMEOUT: float = 300.0
     #: How long Ollama keeps the model resident after a call. Its own default is
     #: 5 minutes, so an intermittent pipeline pays a measured ~2.2s reload on
@@ -276,6 +334,11 @@ class EngineConfig(BaseSettings):
     #: its profile — almost entirely waiting on model calls — is the io pool's,
     #: not the cpu pool's. Neither existing queue is right.
     AGENTS_QUEUE: str = "agents"
+    #: Builds get their own again. A build is five or more model calls writing
+    #: files and can run for many minutes; on the agents queue it would sit in
+    #: front of every investigation, which is the head-of-line blocking that
+    #: queue was split off to avoid in the first place.
+    BUILD_QUEUE: str = "build"
 
     VALIDATE_OUTPUT: bool = True
     #: Reject rather than store a record that fails validation. Off by default:
