@@ -1069,24 +1069,156 @@ with build_tab:
                 render_build(payload)
 
 
+
+def render_context_panel(messages: list[dict], catalogue: list[dict], drafts: list[str]) -> None:
+    """What decided the last answer, and what it had to work with.
+
+    A conversation with two speeds and a rotating cast of specialists is
+    unreadable without this. "Why did that one take a minute" and "which
+    specialist answered" are the first two questions anyone asks, and both are
+    already recorded on the message — this only renders them.
+
+    Created and used are kept apart throughout, because they differ and the
+    difference is the interesting part: a skill declares a roster, and a run
+    reaches some of it.
+    """
+    latest = next(
+        (m for m in reversed(messages) if m["role"] == "assistant"), None
+    )
+    meta = (latest or {}).get("meta") or {}
+
+    st.markdown("**This turn**")
+    if not latest:
+        st.caption("Nothing answered yet.")
+    else:
+        path = meta.get("path", "?")
+        st.markdown(
+            f"`{path}`" + ("  — the loop, several rounds" if path == "investigate"
+                           else "  — one retrieval")
+        )
+        if meta.get("why_path"):
+            st.caption(meta["why_path"])
+
+        skill = meta.get("skill")
+        if skill:
+            st.markdown(f"**Domain** · `{skill}`")
+            st.caption(
+                f"{meta.get('why_skill','')} "
+                f"(confidence {meta.get('skill_confidence', 0)})"
+            )
+        else:
+            st.markdown("**Domain** · _generic corpus specialist_")
+            st.caption(
+                "No skill matched, so the agent ran with the default prompt and "
+                "the full read-only catalogue — what every question got before "
+                "skills existed."
+            )
+
+        runners = meta.get("runners_up") or []
+        if runners:
+            st.caption(
+                "also considered: "
+                + ", ".join(f"{r['skill']} ({r['score']})" for r in runners)
+            )
+        if meta.get("replayed"):
+            st.caption(
+                f"{meta['replayed']} earlier message(s) in context"
+                + (" · plus a summary of what came before" if meta.get("summarised") else "")
+            )
+
+    st.divider()
+
+    st.markdown("**Agents**")
+    declared = meta.get("agents") or []
+    ran = meta.get("ran") or []
+
+    if not latest:
+        st.caption("Nothing has run yet.")
+    elif declared:
+        st.caption("Declared by this skill — the workers a build would spin up:")
+        for agent in declared:
+            owns = ", ".join(agent.get("writes") or []) or "one module"
+            st.markdown(
+                f"- **{agent['name']}**  \n"
+                f"  <span style='color:#888'>{agent['purpose']}</span>  \n"
+                f"  <span style='color:#aaa'>writes {owns}</span>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.caption(
+            "This skill declares no build roster, so it answers questions and "
+            "builds nothing."
+        )
+
+    if ran:
+        st.caption("Ran on this turn — the specialists that actually executed:")
+        # Counted, not listed twice. A specialist that ran two rounds is one
+        # agent that went back out, and rendering it as two reads as two
+        # agents, which is a different and wrong story about the run.
+        rounds: dict[str, int] = {}
+        for name in ran:
+            rounds[name] = rounds.get(name, 0) + 1
+        for name, count in rounds.items():
+            st.markdown(
+                f"- `{name}`" + (f" · {count} rounds" if count > 1 else "")
+            )
+    elif latest and meta.get("path") == "answer":
+        st.caption(
+            "No specialist ran: the fast path retrieves and answers in one step "
+            "without an agent loop."
+        )
+
+    st.divider()
+
+    st.markdown("**Skills**")
+    st.caption(f"{len(catalogue)} installed:")
+    for entry in catalogue:
+        mark = " ← in use" if entry["name"] == meta.get("skill") else ""
+        st.markdown(
+            f"- `{entry['name']}`{mark}  \n"
+            f"  <span style='color:#888'>{len(entry.get('tools') or [])} tools · "
+            f"{len(entry.get('agents') or [])} agents</span>",
+            unsafe_allow_html=True,
+        )
+
+    if drafts:
+        st.caption(f"{len(drafts)} drafted, awaiting your review:")
+        for name in drafts:
+            st.markdown(f"- `{name}` — approve it in the Build tab")
+
+    # Offered where the gap shows up. Drafting writes to a folder the loader
+    # ignores; it becomes an agent's prompt only when a person approves it.
+    if latest and not meta.get("skill"):
+        question = next(
+            (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+        )
+        if question and st.button("Draft a skill for this", key="pg_draft"):
+            drafted = api_post("/api/v1/skills/draft", {"intent": question}, timeout=180)
+            if drafted:
+                st.success(
+                    f"Drafted **{drafted['name']}**. Nothing is live until you "
+                    "read it and approve it in the Build tab."
+                )
+
+
 with playground_tab:
     st.subheader("Playground")
     st.caption(
         "A conversation that keeps its place. Each thread has an id, reopens "
-        "with its history, and the agent answers the next question in the "
-        "light of the ones before it."
+        "with its history, and every message is routed and matched to a domain "
+        "before anything runs — the panel on the right shows what decided it."
     )
 
-    # The only two pieces of state in this dashboard. Everything else is
-    # derived on each rerun, deliberately: caching the messages here is how the
-    # pane ends up showing one thread's history under another thread's title.
+    # The only state in this dashboard. Everything else is derived on each
+    # rerun, deliberately: caching the messages here is how the pane ends up
+    # showing one thread's history under another thread's title.
     st.session_state.setdefault("playground_thread", None)
     st.session_state.setdefault("playground_pending", None)
 
-    history_pane, chat_pane = st.columns([1, 3], gap="medium")
+    history_pane, chat_pane, context_pane = st.columns([1.1, 2.6, 1.4], gap="medium")
 
     with history_pane:
-        st.markdown("**History**")
+        st.markdown("**Chats**")
         if st.button("New chat", use_container_width=True, key="pg_new"):
             st.session_state.playground_thread = None
             st.session_state.playground_pending = None
@@ -1099,9 +1231,8 @@ with playground_tab:
 
         for thread in threads:
             active = thread["id"] == st.session_state.playground_thread
-            label = ("▸ " if active else "") + thread["title"]
             if st.button(
-                label,
+                ("▸ " if active else "") + thread["title"],
                 key=f"pg_open_{thread['id']}",
                 use_container_width=True,
                 type="primary" if active else "secondary",
@@ -1123,10 +1254,10 @@ with playground_tab:
                     st.session_state.playground_pending = None
                     st.rerun()
 
-    with chat_pane:
-        active_id = st.session_state.playground_thread
-        messages = []
+    active_id = st.session_state.playground_thread
+    messages: list[dict] = []
 
+    with chat_pane:
         if active_id:
             # Refetched rather than cached. One call against a local SQLite
             # file, and it removes the whole class of bug where switching
@@ -1150,18 +1281,20 @@ with playground_tab:
                 if sources:
                     with st.expander(f"{len(sources)} source(s)"):
                         for source in sources:
-                            st.markdown(f"**[{source.get('number')}]** `{source.get('origin','')}`")
+                            st.markdown(
+                                f"**[{source.get('number')}]** `{source.get('origin','')}`"
+                            )
                             st.caption((source.get("text") or "")[:300])
                 if meta.get("path"):
-                    detail = meta["path"]
+                    line = meta["path"]
+                    if meta.get("skill"):
+                        line += f" · {meta['skill']}"
                     if meta.get("replayed"):
-                        detail += f" · {meta['replayed']} earlier message(s) in context"
-                    if meta.get("summarised"):
-                        detail += " · plus a summary of what came before"
-                    st.caption(detail)
+                        line += f" · {meta['replayed']} in context"
+                    st.caption(line)
 
-        # Poll here rather than at the send site, so a rerun mid-answer picks
-        # the wait back up instead of losing it.
+        # Polled here rather than at the send site, so a rerun mid-answer picks
+        # the wait back up instead of dropping it.
         pending = st.session_state.playground_pending
         if pending and active_id:
             with st.chat_message("assistant"):
@@ -1179,9 +1312,11 @@ with playground_tab:
                         break
                     step = state.get("progress") or {}
                     stage = step.get("stage", state.get("status", "queued"))
+                    who = step.get("skill") or step.get("role") or ""
                     status_box.info(
                         ("investigating — this takes a minute"
                          if stage == "investigate" else "thinking")
+                        + (f" · {who}" if who else "")
                         + f" · {int(time.time() - began)}s"
                     )
                     time.sleep(POLL_INTERVAL)
@@ -1200,7 +1335,13 @@ with playground_tab:
                 queued = api_post("/api/v1/threads", {"message": said}, timeout=30)
                 if queued:
                     st.session_state.playground_thread = queued["thread"]["id"]
-
             if queued and queued.get("task_id"):
                 st.session_state.playground_pending = queued["task_id"]
             st.rerun()
+
+    with context_pane:
+        render_context_panel(
+            messages,
+            (api_get("/api/v1/skills") or {}).get("skills") or [],
+            (api_get("/api/v1/skills/drafts") or {}).get("drafts") or [],
+        )

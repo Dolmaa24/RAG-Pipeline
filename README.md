@@ -883,11 +883,24 @@ continue where they stopped.
 | `GET` | `/api/v1/threads/{id}/replies/{task_id}` — progress, then the reply |
 | `DELETE` | `/api/v1/threads/{id}` — thread and messages |
 
-**Which path a turn takes is decided per message**, by the same
-`pipeline/agents/route.py` that `/api/v1/answer` uses: a question asking for a
-set goes to the loop, everything else is answered directly. That is where its
-bias pays — most conversational turns are ordinary lookups that should come
-back in seconds, and the loop earns its four-fold latency only sometimes.
+**Two decisions are made per message, and neither costs a model call.**
+`pipeline/agents/route.py` picks the path — a question asking for a set goes to
+the loop, everything else is answered directly — and `pipeline/skills/match.py`
+picks the domain, so the matched skill's specialist is what answers. A message
+that matches no skill runs the generic corpus role, which is what every
+question got before skills existed.
+
+Both are recorded on the stored message rather than left in a log, because a
+conversation with two speeds and a rotating cast of specialists is unreadable
+without them. The dashboard's Playground is three panes for that reason: chats
+on the left, the conversation in the middle, and a panel on the right showing
+the intent breakdown, the skill in use, and the agents — **the roster the skill
+declares kept separate from the specialists that actually ran**, because those
+differ and the difference is the interesting part.
+
+The trigger match is free, so the API reports it immediately; anything needing
+the vector comparison is settled in the worker, where the embedder is already
+resident. An HTTP handler has no business loading a 130 MB model.
 
 Messages are **queued, not answered inline**. The user's message is stored
 first, so it appears the moment it is sent rather than when the agent finishes,
@@ -1016,6 +1029,11 @@ the body is prompt text. Nothing in a skill folder is imported or executed. But
 the body *does* reach a model's system prompt, so a skill file carries the trust
 level of `pipeline/agents/roles.py` — review one the same way, and never load
 skills from an upload or a URL.
+
+Each shipped skill declares its domain's own workers, so it both answers
+questions and describes what the software for that domain is built from — a
+clinic has a reception, a clinician, a pharmacy and records; an insurer has an
+underwriter, claims, policy admin and payments.
 
 `skills/README.md` has the field reference and how to add one. The API picks up
 an edited skill on its own; **Celery workers do not, so restart them.**
