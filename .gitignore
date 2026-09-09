@@ -23,6 +23,11 @@ __pycache__/
 
 # Pipeline artifacts
 output/
+
+# Code the build workflow generated. Model-written, never reviewed by anyone
+# unless someone chose to, and regenerated on every build — it is output, not
+# source, and a commit of it would be a commit of something nobody wrote.
+workspace/
 temp_media_audio*
 media_*/
 live_*/

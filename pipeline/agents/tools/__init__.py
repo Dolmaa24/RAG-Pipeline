@@ -5,7 +5,7 @@ the in-process loop — import it for that side effect and then read the registr
 so neither has its own list to keep in step.
 """
 
-from pipeline.agents.tools import acquire, corpus  # noqa: F401  (registration)
+from pipeline.agents.tools import acquire, build, corpus  # noqa: F401  (registration)
 from pipeline.agents.tools.registry import (
     READ_ONLY,
     Effect,
