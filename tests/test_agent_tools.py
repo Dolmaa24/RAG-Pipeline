@@ -1,8 +1,9 @@
 """The tool catalog: schemas, the effect gate, and every handler.
 
-Phase 0 of docs/multi-agent-plan.md. No model runs in any of this — the point of
-declaring tools before building a loop is that this layer stays correct whether
-or not anything ever calls it agentically.
+The foundation the agent loop was built on, and deliberately built first. No
+model runs in any of this — the point of declaring tools before building a loop
+is that this layer stays correct whether or not anything ever calls it
+agentically.
 """
 
 from __future__ import annotations

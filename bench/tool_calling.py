@@ -1,10 +1,10 @@
 """Can a model this small actually drive the tool catalog?
 
-Every phase of docs/multi-agent-plan.md from 02 onward rests on one assumption
-that has never been measured in this repo: that a model small enough to sit in
-8 GB alongside BGE, GLiNER, Kuzu and LanceDB can pick the right tool, with the
-right arguments, several turns running. If it cannot, the supervisor belongs on
-Groq and parts of phase 04 are simply not reachable offline.
+The whole agent layer rests on one assumption that had never been measured in
+this repo: that a model small enough to sit in 8 GB alongside BGE, GLiNER, Kuzu
+and LanceDB can pick the right tool, with the right arguments, several turns
+running. If it cannot, the supervisor belongs on Groq and a good deal of the
+agent work is simply not reachable offline.
 
 Six checks, each one a way the loop fails in practice rather than in theory:
 
@@ -434,10 +434,10 @@ def report(scores: list[Score]) -> None:
             print(f"  · {line}")
 
     print()
-    print("Gate (docs/multi-agent-plan.md): right-tool above ~70% with clean")
-    print("multi-step means the supervisor can run locally; 40-70% means local")
-    print("specialists with a hosted supervisor; below 40% means the phase-02")
-    print("fallback shim is the primary path for local models, not an option.")
+    print("Gate: right-tool above ~70% with clean multi-step means the")
+    print("supervisor can run locally; 40-70% means local specialists with a")
+    print("hosted supervisor; below 40% means the tool shim is the primary")
+    print("path for local models rather than a fallback.")
 
 
 def main() -> None:
