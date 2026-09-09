@@ -850,6 +850,93 @@ unsupported claims caught and 29% of supported sentences flagged wrongly
 `AGENT_VERIFY=false` is there if the false alarms bother you more than the
 misses.
 
+## Playground: conversations that keep their place
+
+Every other way into this pipeline is one-shot. `/api/v1/answer` retrieves and
+answers, `/api/v1/investigate` runs the loop, and each starts from nothing — so
+a follow-up cannot refer to the answer before it.
+
+```bash
+curl -X POST localhost:8000/api/v1/threads -H 'Content-Type: application/json' -d '{
+  "message": "What topics does the corpus cover?"
+}'
+```
+
+```
+> What topics does the corpus cover?
+  [investigate]  The corpus covers Tesla, Inc., SpaceX, and Apple Inc.
+
+> Which of those has the most detail?
+  [answer, 3 replayed]  Tesla, Inc.
+```
+
+"Those" resolves because the thread's history was replayed into the agent's
+messages. Threads persist, list newest-activity-first, reopen by id, and
+continue where they stopped.
+
+| Method | Path |
+|---|---|
+| `POST` | `/api/v1/threads` — new thread; an optional `message` takes the first turn |
+| `GET` | `/api/v1/threads` — newest activity first |
+| `GET` | `/api/v1/threads/{id}` — metadata and every message |
+| `POST` | `/api/v1/threads/{id}/messages` — **202**, queued |
+| `GET` | `/api/v1/threads/{id}/replies/{task_id}` — progress, then the reply |
+| `DELETE` | `/api/v1/threads/{id}` — thread and messages |
+
+**Which path a turn takes is decided per message**, by the same
+`pipeline/agents/route.py` that `/api/v1/answer` uses: a question asking for a
+set goes to the loop, everything else is answered directly. That is where its
+bias pays — most conversational turns are ordinary lookups that should come
+back in seconds, and the loop earns its four-fold latency only sometimes.
+
+Messages are **queued, not answered inline**. The user's message is stored
+first, so it appears the moment it is sent rather than when the agent finishes,
+and a worker that then fails still leaves the question visible.
+
+### SQLite, not Mongo
+
+Conversations live in `playground.db` through the standard library's `sqlite3`.
+`MONGO_URI` is optional and unset by default, which means every Mongo write
+falls through to a JSONL file — a reasonable outcome for an extraction record
+you can re-run, and not one for a conversation whose whole point is that you
+can open it again.
+
+Migrations are `PRAGMA user_version` and a list of steps applied forward. No
+dependency, and the file itself records where it is. Foreign keys are enabled
+per connection, because SQLite defaults them **off** and `ON DELETE CASCADE` is
+silently inert without it.
+
+### Fitting fifty turns into an 8192-token window
+
+The limit people reach for here is the wrong one. `OLLAMA_NUM_PREDICT` and
+`GROQ_MAX_OUTPUT_TOKENS` cap the *reply*; replaying history never touches
+either. What it exhausts is `OLLAMA_NUM_CTX` — **8192 for input and output
+together** — and Groq's 8000 tokens a minute.
+
+With 4096 reserved for the reply, everything sent must fit in about 4096:
+
+```
+  system prompt        ~300
+  tool schemas       ~1,000
+  the new question     ~100
+  ------------------------
+  left for history   ~2,600 tokens   ≈ 8-12 short exchanges
+```
+
+So: **a sliding window, plus one summary of what falls out.** The newest turns
+that fit are replayed verbatim. Anything older is evicted once, folded into a
+rolling summary on the thread, and replayed thereafter as a single system
+message. A ten-turn conversation never summarises at all; a fifty-turn one does
+it a handful of times — where summarising every turn would put a second model
+call in front of every answer, competing for the same per-minute budget.
+
+`tool` messages are stored for the trace and never replayed: they are the
+bulkiest thing in a thread, the agent already acted on them, and feeding
+yesterday's search results back invites the model to treat them as current.
+
+`AgentLoop.run()` takes an optional `history`, placed after the system prompt
+and before the new question. Callers that pass nothing behave exactly as before.
+
 ## Skills: one folder per domain
 
 The pipeline shipped with two specialists, both hard-coded and both
@@ -1328,6 +1415,7 @@ pipeline/
   skills/       SKILL.md loading, intent matching, synthesis, the composed role
   agents/       the loop, the supervisor, the builder, tools, the sandbox
   runner.py     the pipeline itself
+playground/     threads and messages in SQLite, context hydration, one turn
 skills/         one folder per domain: health, ecommerce, insurance, school
 workspace/      generated projects (gitignored)
 tests/          offline tests; those marked `slow` load a real model

@@ -353,8 +353,10 @@ def render_investigation(payload: dict) -> None:
 
 
 # Main Interface
-extract_tab, search_tab, investigate_tab, task_tab, build_tab = st.tabs(
-    ["Extract", "Search", "Investigate", "Task", "Build"]
+(
+    extract_tab, search_tab, investigate_tab, task_tab, build_tab, playground_tab
+) = st.tabs(
+    ["Extract", "Search", "Investigate", "Task", "Build", "Playground"]
 )
 
 with extract_tab:
@@ -1065,3 +1067,140 @@ with build_tab:
             if payload:
                 status_box.empty()
                 render_build(payload)
+
+
+with playground_tab:
+    st.subheader("Playground")
+    st.caption(
+        "A conversation that keeps its place. Each thread has an id, reopens "
+        "with its history, and the agent answers the next question in the "
+        "light of the ones before it."
+    )
+
+    # The only two pieces of state in this dashboard. Everything else is
+    # derived on each rerun, deliberately: caching the messages here is how the
+    # pane ends up showing one thread's history under another thread's title.
+    st.session_state.setdefault("playground_thread", None)
+    st.session_state.setdefault("playground_pending", None)
+
+    history_pane, chat_pane = st.columns([1, 3], gap="medium")
+
+    with history_pane:
+        st.markdown("**History**")
+        if st.button("New chat", use_container_width=True, key="pg_new"):
+            st.session_state.playground_thread = None
+            st.session_state.playground_pending = None
+            st.rerun()
+
+        listing = api_get("/api/v1/threads", limit=50) or {}
+        threads = listing.get("threads") or []
+        if not threads:
+            st.caption("No conversations yet.")
+
+        for thread in threads:
+            active = thread["id"] == st.session_state.playground_thread
+            label = ("▸ " if active else "") + thread["title"]
+            if st.button(
+                label,
+                key=f"pg_open_{thread['id']}",
+                use_container_width=True,
+                type="primary" if active else "secondary",
+            ):
+                st.session_state.playground_thread = thread["id"]
+                st.session_state.playground_pending = None
+                st.rerun()
+            st.caption(
+                f"{thread['message_count']} message(s) · "
+                f"{thread['updated_at'][:16].replace('T', ' ')}"
+                + (" · summarised" if thread.get("has_summary") else "")
+            )
+
+        if st.session_state.playground_thread:
+            st.divider()
+            if st.button("Delete this thread", use_container_width=True, key="pg_del"):
+                if api_delete(f"/api/v1/threads/{st.session_state.playground_thread}"):
+                    st.session_state.playground_thread = None
+                    st.session_state.playground_pending = None
+                    st.rerun()
+
+    with chat_pane:
+        active_id = st.session_state.playground_thread
+        messages = []
+
+        if active_id:
+            # Refetched rather than cached. One call against a local SQLite
+            # file, and it removes the whole class of bug where switching
+            # threads leaves the previous one's messages on screen.
+            loaded = api_get(f"/api/v1/threads/{active_id}")
+            if loaded is None:
+                st.session_state.playground_thread = None
+                st.stop()
+            messages = loaded.get("messages") or []
+            st.caption(f"Thread `{active_id}`")
+        else:
+            st.caption("A new conversation. Say something to start it.")
+
+        for message in messages:
+            if message["role"] not in ("user", "assistant"):
+                continue
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                meta = message.get("meta") or {}
+                sources = meta.get("sources") or []
+                if sources:
+                    with st.expander(f"{len(sources)} source(s)"):
+                        for source in sources:
+                            st.markdown(f"**[{source.get('number')}]** `{source.get('origin','')}`")
+                            st.caption((source.get("text") or "")[:300])
+                if meta.get("path"):
+                    detail = meta["path"]
+                    if meta.get("replayed"):
+                        detail += f" · {meta['replayed']} earlier message(s) in context"
+                    if meta.get("summarised"):
+                        detail += " · plus a summary of what came before"
+                    st.caption(detail)
+
+        # Poll here rather than at the send site, so a rerun mid-answer picks
+        # the wait back up instead of losing it.
+        pending = st.session_state.playground_pending
+        if pending and active_id:
+            with st.chat_message("assistant"):
+                status_box = st.empty()
+                began = time.time()
+                landed = None
+                while time.time() - began < POLL_TIMEOUT:
+                    state = api_get(f"/api/v1/threads/{active_id}/replies/{pending}")
+                    if state is None:
+                        break
+                    if state.get("done"):
+                        if state.get("error"):
+                            st.error(state["error"])
+                        landed = state.get("result")
+                        break
+                    step = state.get("progress") or {}
+                    stage = step.get("stage", state.get("status", "queued"))
+                    status_box.info(
+                        ("investigating — this takes a minute"
+                         if stage == "investigate" else "thinking")
+                        + f" · {int(time.time() - began)}s"
+                    )
+                    time.sleep(POLL_INTERVAL)
+
+            st.session_state.playground_pending = None
+            if landed:
+                st.rerun()
+
+        said = st.chat_input("Ask something", key="pg_input")
+        if said:
+            if active_id:
+                queued = api_post(
+                    f"/api/v1/threads/{active_id}/messages", {"content": said}, timeout=30
+                )
+            else:
+                queued = api_post("/api/v1/threads", {"message": said}, timeout=30)
+                if queued:
+                    st.session_state.playground_thread = queued["thread"]["id"]
+
+            if queued and queued.get("task_id"):
+                st.session_state.playground_pending = queued["task_id"]
+            st.rerun()
