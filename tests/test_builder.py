@@ -81,6 +81,8 @@ class Scripted:
         if "You are the cleaner" in prompt:
             return ToolTurn(backend=self.name, model=self.model, calls=[
                 call("write_source", path="cleanup.py", content="def sweep(o):\n    return list(o)\n"),
+                call("write_source", path="tests/test_cleanup.py",
+                     content="from cleanup import sweep\n\ndef test_sweep():\n    assert sweep([1]) == [1]\n"),
             ])
         if "Run the tests." in prompt:
             return ToolTurn(backend=self.name, model=self.model, calls=[call("run_tests")])
@@ -161,7 +163,8 @@ def test_a_worker_is_told_what_already_exists(workspace, skill):
 def test_the_files_are_written(workspace, skill):
     result = run(skill, Scripted())
     assert set(result.files) == {
-        "README.md", "cleanup.py", "models.py", "orders.py", "tests/test_orders.py"
+        "README.md", "cleanup.py", "models.py", "orders.py",
+        "tests/test_orders.py", "tests/test_cleanup.py",
     }
 
 
@@ -169,7 +172,7 @@ def test_each_step_reports_only_what_it_wrote(workspace, skill):
     result = run(skill, Scripted())
     by_name = {step.name: step for step in result.steps}
     assert by_name["contract"].files == ["README.md", "models.py"]
-    assert by_name["cleaner"].files == ["cleanup.py"]
+    assert by_name["cleaner"].files == ["cleanup.py", "tests/test_cleanup.py"]
 
 
 def test_a_step_that_wrote_nothing_says_so(workspace, skill):
@@ -465,3 +468,90 @@ def test_an_unreachable_model_falls_back_and_says_so(workspace, skill, monkeypat
 
     assert any("unavailable" in w for w in result.warnings)
     assert next(s for s in result.steps if s.name == "receptionist").backend == "groq"
+
+
+# --- finishing what a worker left ------------------------------------------
+
+
+class HalfDone(Scripted):
+    """Writes its module, says it is done, and never writes its test.
+
+    What a small model actually does — and what a shimmed one is structurally
+    unable to avoid, since the shim allows one tool call per turn.
+    """
+
+    def complete_with_tools(self, *, messages, tools, tool_choice="auto"):
+        prompt = messages[-1].content if messages else ""
+        # Recorded before branching, or the prompts this double answers itself
+        # never reach the log the assertions read.
+        self.prompts.append(prompt)
+        self.offered.append({tool["name"] for tool in tools})
+
+        if "do not exist yet" in prompt:
+            return ToolTurn(backend=self.name, model=self.model, calls=[
+                call("write_source", path="tests/test_orders.py",
+                     content="from orders import take_order\n\ndef test_o():\n    assert take_order('l')\n"),
+            ])
+        if "You are the receptionist" in prompt:
+            return ToolTurn(backend=self.name, model=self.model, calls=[
+                call("write_source", path="orders.py", content="def take_order(d):\n    return d\n"),
+            ])
+        # Pop the two it is about to record again.
+        self.prompts.pop()
+        self.offered.pop()
+        return super().complete_with_tools(messages=messages, tools=tools)
+
+
+def test_a_worker_is_asked_once_for_the_files_it_skipped(workspace, skill):
+    """Measured, this is the difference between a build with tests and one
+    without."""
+    result = run(skill, HalfDone())
+    receptionist = next(s for s in result.steps if s.name == "receptionist")
+    assert receptionist.files == ["orders.py", "tests/test_orders.py"]
+    assert receptionist.note == ""
+
+
+def test_the_follow_up_is_reported_as_one_worker(workspace, skill):
+    """A roster of two workers whose trace shows four is a trace about the
+    retry rather than about the build."""
+    result = run(skill, HalfDone())
+    assert [s.name for s in result.steps].count("receptionist") == 1
+
+
+def test_the_follow_up_names_only_the_missing_files(workspace, skill):
+    backend = HalfDone()
+    run(skill, backend)
+    ask = next(p for p in backend.prompts if "do not exist yet" in p)
+    assert "tests/test_orders.py" in ask
+    assert "orders.py" in ask  # named as already written
+
+
+def test_a_worker_that_wrote_everything_is_not_asked_again(workspace, skill):
+    backend = Scripted()
+    run(skill, backend)
+    assert not any("do not exist yet" in p for p in backend.prompts)
+
+
+def test_a_worker_that_wrote_nothing_is_not_asked_again(workspace, skill):
+    """Nothing to build on, and a second ask of a model that produced nothing
+    is a second failure at the same price."""
+    backend = Scripted(write=False)
+    run(skill, backend)
+    assert not any("do not exist yet" in p for p in backend.prompts)
+
+
+def test_a_worker_that_still_skips_is_reported_honestly(workspace, skill):
+    class NeverWritesTests(Scripted):
+        def complete_with_tools(self, *, messages, tools, tool_choice="auto"):
+            prompt = messages[-1].content if messages else ""
+            if "do not exist yet" in prompt:
+                return ToolTurn(text="done", backend=self.name, model=self.model)
+            if "You are the receptionist" in prompt:
+                return ToolTurn(backend=self.name, model=self.model, calls=[
+                    call("write_source", path="orders.py", content="x = 1\n"),
+                ])
+            return super().complete_with_tools(messages=messages, tools=tools)
+
+    result = run(skill, NeverWritesTests())
+    receptionist = next(s for s in result.steps if s.name == "receptionist")
+    assert receptionist.note == "did not write tests/test_orders.py"

@@ -91,9 +91,9 @@ Write only the files listed as yours, one write_source call each, each one
 complete. Import from models, and from the standard library. Do not import
 another worker's module unless the contract says it exists.
 
-Write every file in your list, including the test files, and write them all in
-one go — issue one write_source call per file, together, in a single reply. Do
-not write one and wait.
+Write every file in your list, including the test files. Write them one after
+another without stopping in between — you are not finished until every file in
+your list exists.
 
 Test what your own code does, not what another worker's does.
 
@@ -347,13 +347,59 @@ class Builder:
         if written:
             parts.append("Already in the project: " + ", ".join(written))
 
-        return self._run_step(
+        step = self._run_step(
             BuildStep(name=agent.name, purpose=agent.purpose, declared=wanted),
             system=_WORKER_SYSTEM,
             prompt="\n\n".join(parts),
             root=root,
             effects=(Effect.CODE,),
         )
+        return self._finish_worker(step, root)
+
+    def _finish_worker(self, step: BuildStep, root: Path) -> BuildStep:
+        """Ask once more for the files the worker did not write.
+
+        Measured, this is the difference between a build with tests and one
+        without. A worker declares its module and its test file; a small model
+        writes the module, says it is done, and stops. Worse, a model driven
+        through the tool shim can only make **one call per turn**, so "write
+        both" is an instruction it is structurally unable to follow in one go.
+
+        So the gap is named rather than reprimanded: a second short step asking
+        for exactly the missing files, with what was already written in front
+        of it. One extra attempt, never more -- a worker that will not write
+        its tests twice is not going to on a third ask, and a build has a
+        person waiting on it.
+        """
+        missing = [name for name in step.declared if name not in step.files]
+        if not missing or not step.files:
+            return step
+
+        prompt = (
+            f"You wrote {', '.join(step.files)}.\n\n"
+            f"These files from your list do not exist yet:\n"
+            + "\n".join(f"  {name}" for name in missing)
+            + "\n\nWrite them now, one write_source call each. Read what you "
+            "already wrote with read_source if you need to match its names."
+        )
+        follow_up = self._run_step(
+            BuildStep(name=f"{step.name} (finishing)", purpose="the files still missing",
+                      declared=missing),
+            system=_WORKER_SYSTEM,
+            prompt=prompt,
+            root=root,
+            effects=(Effect.CODE,),
+        )
+
+        # Reported as one worker, not two. The roster names four workers and a
+        # trace showing eight is a trace about this method rather than about
+        # the build.
+        step.files = [*step.files, *follow_up.files]
+        step.tools = [*step.tools, *follow_up.tools]
+        step.seconds += follow_up.seconds
+        still = [name for name in step.declared if name not in step.files]
+        step.note = "did not write " + ", ".join(still) if still else ""
+        return step
 
     def _tests(self, root: Path) -> tuple[BuildStep, Optional[dict[str, Any]]]:
         step = self._run_step(
