@@ -51,6 +51,10 @@ faster-whisper==1.2.1    # portable fallback; CPU-only on macOS
 celery==5.6.3
 redis==8.1.0
 flower==2.0.1            # queue visibility on :5555
+# Celery has had no --autoreload since 4.x, so `./run.sh <worker> --reload`
+# wraps the worker in watchmedo and restarts it when a .py file changes.
+# Development only; nothing imports it.
+watchdog==6.0.0
 
 # --- API ---
 fastapi==0.141.1

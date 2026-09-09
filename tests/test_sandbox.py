@@ -130,7 +130,7 @@ def test_the_environment_is_an_allowlist(root):
     """Not a denylist. A denylist has to know every name a secret arrives
     under, and .gitignore in this repo records how that goes.
 
-    Three sources of names are tolerated beyond the six passed deliberately:
+    Three sources of names are tolerated beyond the seven passed deliberately:
     pytest sets its own inside the child, and the platform injects some
     regardless of what is handed over -- macOS adds ``__CF_USER_TEXT_ENCODING``
     to every process through CoreFoundation, which no environment argument
@@ -138,8 +138,8 @@ def test_the_environment_is_an_allowlist(root):
     """
     output = _probe(root, (
         "import os\n"
-        "PASSED = {'PATH', 'HOME', 'TMPDIR', 'PYTHONDONTWRITEBYTECODE', "
-        "'PYTHONUNBUFFERED', 'LANG'}\n"
+        "PASSED = {'PATH', 'HOME', 'TMPDIR', 'PYTHONPATH', "
+        "'PYTHONDONTWRITEBYTECODE', 'PYTHONUNBUFFERED', 'LANG'}\n"
         "def test_small_environment():\n"
         "    unexpected = [k for k in os.environ if k not in PASSED\n"
         "                  and not k.startswith(('PYTEST_', '__'))]\n"
@@ -249,3 +249,48 @@ def test_the_tree_hides_caches_and_dotfiles(root):
     (root / ".home").mkdir()
     (root / ".home" / "junk").write_text("")
     assert sandbox.tree(root) == ["a.py"]
+
+
+def test_a_generated_test_can_import_the_module_it_tests(root):
+    """Measured on a real build: three test files written, all three
+    ImportError.
+
+    pytest puts the *test file's* directory on sys.path, not the project root,
+    so `tests/test_orders.py` doing `from models import Order` cannot see
+    models.py one level up — and the whole execute path then reports a failure
+    that is about the runner rather than about the code.
+    """
+    (root / "models.py").write_text("class Order:\n    drink = 'latte'\n")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_orders.py").write_text(
+        "from models import Order\n\ndef test_it():\n    assert Order.drink == 'latte'\n"
+    )
+    run = sandbox.run_tests(root)
+    assert run.ok, run.output
+
+
+def test_the_sandbox_path_is_still_not_a_way_back_to_the_pipeline(root):
+    """PYTHONPATH now holds one directory. It must hold only that one."""
+    (root / "test_probe.py").write_text(
+        "import os, pytest\n"
+        "def test_only_the_sandbox():\n"
+        f"    assert os.environ['PYTHONPATH'] == {str(root.resolve())!r}\n"
+        "def test_no_pipeline():\n"
+        "    with pytest.raises(ImportError):\n"
+        "        import pipeline\n"
+    )
+    assert "2 passed" in sandbox.run_tests(root).output
+
+
+def test_failure_output_names_files_relatively(root):
+    """It goes to a model. Shown an absolute path out of a traceback, one wrote
+    its fix to `workspace/school/models.py` *relative to the sandbox* and
+    created workspace/school/workspace/school/models.py — legal, confined, and
+    junk. A model that only sees `tests/test_x.py` writes back the same."""
+    (root / "tests").mkdir()
+    (root / "tests" / "test_bad.py").write_text("def test_no():\n    assert False\n")
+
+    output = sandbox.run_tests(root).output
+    assert "tests/test_bad.py" in output
+    assert str(root) not in output
+    assert str(root.parent) not in output

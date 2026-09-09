@@ -6,6 +6,11 @@
 #   ./run.sh worker-cpu   # CPU/GPU worker only (Whisper, LLM, Chromium)
 #   ./run.sh worker-agents # investigation worker only (threads, model calls)
 #   ./run.sh worker-build  # build worker only (writes generated code)
+#   ./run.sh dev           # everything, with the workers restarting on save
+#
+# Add --reload to any worker to have it restart when a .py file changes:
+#
+#   ./run.sh worker-agents --reload
 #   ./run.sh mcp          # MCP server over stdio (add --http for the HTTP one)
 #   ./run.sh api
 #   ./run.sh dashboard
@@ -41,11 +46,33 @@ check_redis() {
   fi
 }
 
+# Celery dropped --autoreload in 4.x and never replaced it, so a worker keeps
+# running whatever code it imported at startup. Editing a task and watching the
+# old one run is the single most expensive confusion this project has produced:
+# it looks exactly like a code bug, and the code is fine.
+#
+#   ./run.sh worker-agents --reload
+#   ./run.sh dev                      # the whole stack, workers reloading
+#
+# devwatch.py rather than watchmedo, because watchdog matches its ignore
+# patterns with pathlib's PurePath.match — which matches from the right and
+# will not let * cross a separator, so no spelling of "*/workspace/*" excludes
+# that directory's subtree. Measured: five candidate patterns, none excluded
+# anything. That matters here because a build writes Python into workspace/,
+# and a watcher that noticed would restart the worker writing it, mid-build,
+# for ever.
+run_worker() {
+  if [ "${RELOAD:-0}" = "1" ]; then
+    exec "$VENV/python" devwatch.py -- "$@"
+  fi
+  exec "$@"
+}
+
 worker_io() {
   # Network-bound: the threads are almost always waiting, so concurrency is
   # cheap. The per-host rate limiter, not this number, is what protects sites.
   check_redis
-  exec "$VENV/celery" -A celery_app worker \
+  run_worker "$VENV/celery" -A celery_app worker \
     --queues=io --pool=threads --concurrency=16 \
     --hostname=io@%h --loglevel=info
 }
@@ -54,7 +81,8 @@ worker_cpu() {
   # Whisper, the local model, Chromium and OCR each want a core or the GPU.
   # Keeping this narrow is the point: two of them at once is already contention.
   check_redis
-  CELERY_WORKER_QUEUE=cpu exec "$VENV/celery" -A celery_app worker \
+  export CELERY_WORKER_QUEUE=cpu
+  run_worker "$VENV/celery" -A celery_app worker \
     --queues=cpu --pool=prefork --concurrency=2 \
     --hostname=cpu@%h --loglevel=info
 }
@@ -66,7 +94,7 @@ worker_agents() {
   # already scars in this codebase. Concurrency is low because each run is
   # minutes of model calls, and two at once on 8 GB is contention.
   check_redis
-  exec "$VENV/celery" -A celery_app worker \
+  run_worker "$VENV/celery" -A celery_app worker \
     --queues=agents --pool=threads --concurrency=2 \
     --hostname=agents@%h --loglevel=info
 }
@@ -80,7 +108,7 @@ worker_build() {
   # Concurrency 1: two builds at once means two model clients and two pytest
   # subprocesses on a machine that is already holding an embedder.
   check_redis
-  exec "$VENV/celery" -A celery_app worker \
+  run_worker "$VENV/celery" -A celery_app worker \
     --queues=build --pool=threads --concurrency=1 \
     --hostname=build@%h --loglevel=info
 }
@@ -95,20 +123,33 @@ flower()    { check_redis; exec "$VENV/celery" -A celery_app flower --port=5555;
 all() {
   check_redis
   trap 'kill 0' EXIT INT TERM   # one Ctrl-C stops the whole stack
-  "$0" worker-io     & sleep 1
-  "$0" worker-cpu    & sleep 1
-  "$0" worker-agents & sleep 1
-  "$0" worker-build  & sleep 1
+  local flag=""
+  [ "${RELOAD:-0}" = "1" ] && flag="--reload"
+  "$0" worker-io     $flag & sleep 1
+  "$0" worker-cpu    $flag & sleep 1
+  "$0" worker-agents $flag & sleep 1
+  "$0" worker-build  $flag & sleep 1
   "$0" api        & sleep 2
   "$0" dashboard  &
   echo
   echo "  API        http://127.0.0.1:8000/docs"
   echo "  Dashboard  http://localhost:8501"
   echo "  Health     curl localhost:8000/health"
+  [ -n "$flag" ] && echo "  Reload     workers restart when a .py file is saved"
   echo
   echo "Ctrl-C stops everything."
   wait
 }
+
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --reload) RELOAD=1 ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+export RELOAD="${RELOAD:-0}"
+set -- "${ARGS[@]}"
 
 case "${1:-all}" in
   worker-io)  worker_io ;;
@@ -120,5 +161,6 @@ case "${1:-all}" in
   flower)     flower ;;
   mcp)        shift; mcp "$@" ;;
   all)        all ;;
-  *) echo "usage: $0 [all|worker-io|worker-cpu|worker-agents|worker-build|api|dashboard|flower|mcp]" >&2; exit 2 ;;
+  dev)        RELOAD=1 all ;;
+  *) echo "usage: $0 [all|dev|worker-io|worker-cpu|worker-agents|worker-build|api|dashboard|flower|mcp] [--reload]" >&2; exit 2 ;;
 esac

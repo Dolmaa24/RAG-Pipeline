@@ -414,7 +414,11 @@ def health() -> dict[str, Any]:
         import redis
 
         client = redis.Redis.from_url(config.REDIS_URL)
-        for queue in (config.IO_QUEUE, config.CPU_QUEUE, config.AGENTS_QUEUE):
+        # Every queue anything routes to. Leaving one out hides exactly the
+        # failure this is for: work piling up because nothing consumes it.
+        for queue in (
+            config.IO_QUEUE, config.CPU_QUEUE, config.AGENTS_QUEUE, config.BUILD_QUEUE
+        ):
             queues[queue] = int(client.llen(queue))
         redis_ok = True
     except Exception:

@@ -267,3 +267,13 @@ def test_every_routed_queue_has_a_worker_that_consumes_it():
 
     routed = {route["queue"] for route in celery_app.conf.task_routes.values()}
     assert routed <= served, f"no worker consumes: {sorted(routed - served)}"
+
+
+def test_health_reports_depth_for_every_queue(client):
+    """A queue missing from here hides the failure this endpoint exists for:
+    work piling up because nothing is consuming it."""
+    from celery_app import celery_app
+
+    depths = client.get("/health").json()["queue_depth"]
+    routed = {route["queue"] for route in celery_app.conf.task_routes.values()}
+    assert routed <= set(depths), f"not reported: {sorted(routed - set(depths))}"

@@ -686,6 +686,44 @@ command — slower and worse, not broken.
 Neither MongoDB nor a Groq key is required. Without Mongo, results go to
 `output/extractions.jsonl`; without Groq, everything uses Ollama.
 
+## Workers and reloading
+
+Celery dropped `--autoreload` in 4.x and never replaced it, so a worker runs
+whatever it imported at startup. Editing a task and watching the old one run is
+the most expensive confusion this project has produced — it presents as a code
+bug, and the code is fine.
+
+```bash
+./run.sh dev                    # the whole stack, workers restarting on save
+./run.sh worker-agents --reload # or one of them
+```
+
+`devwatch.py` does the watching, not watchmedo, and the reason is worth knowing
+before changing it: watchdog matches its ignore patterns with
+`pathlib.PurePath.match`, which matches **from the right** and will not let `*`
+cross a separator. So `*/workspace/*` matches `/proj/workspace/a.py` and not
+`/proj/workspace/b/a.py`, and no spelling — `**/workspace/**` included —
+excludes a directory's subtree. Measured: five candidate patterns, none
+excluded anything.
+
+That matters here more than it usually would, because **this repository writes
+Python as data**. A build generates modules into `workspace/`, and a watcher
+that treated those as source would restart the worker writing them, mid-build,
+for ever. So the ignore rule is a check on path components, and it has tests.
+
+What restarts a worker: a `.py` file under `pipeline/`, `playground/`, `bench/`,
+`config/`, or at the repository root. What does not: anything under `venv/`,
+`workspace/`, `lance_data/`, `kuzu_db/`, `output/`, `__pycache__/`, and any
+file that is not `.py`.
+
+**Skills already hot-reload without any of this.** The loader caches on mtime,
+so an edited `SKILL.md` is picked up on the next request — restarting a worker
+for one is a slower way to get the same result.
+
+A reload kills work in flight, exactly as `uvicorn --reload` does. Use
+`./run.sh` rather than `./run.sh dev` when you care about a long crawl
+finishing.
+
 ## Running
 
 ### Pre-flight Checks

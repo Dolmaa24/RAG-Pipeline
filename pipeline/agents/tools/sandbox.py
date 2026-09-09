@@ -151,6 +151,15 @@ def _clean_environment(root: Path) -> dict[str, str]:
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(home),
         "TMPDIR": str(home),
+        # The sandbox and nothing else. Without it a generated test doing
+        # `from models import Order` fails to import: pytest puts the *test
+        # file's* directory on sys.path, not the project root, so tests/ can
+        # see itself and not the modules it is testing. Measured on a real
+        # build -- three test files written, all three ImportError.
+        #
+        # This is still not a way back to the pipeline. The path contains one
+        # directory, the sandbox, and the project is not under it.
+        "PYTHONPATH": str(root),
         "PYTHONDONTWRITEBYTECODE": "1",
         # Unbuffered, so output survives a kill on timeout.
         "PYTHONUNBUFFERED": "1",
@@ -213,7 +222,7 @@ def run_tests(root: Path, *, timeout: Optional[float] = None) -> TestRun:
         raise SandboxError(f"could not start the test runner: {exc}") from exc
 
     elapsed = time.perf_counter() - started
-    output = _trim((completed.stdout or "") + (completed.stderr or ""))
+    output = _relative(_trim((completed.stdout or "") + (completed.stderr or "")), root)
     # pytest exits 5 when it collected nothing, which is not a failing suite.
     # Which of the two reasons it is matters to whoever reads the report, and
     # they call for different fixes: a build that wrote no test files at all,
@@ -243,6 +252,21 @@ def run_tests(root: Path, *, timeout: Optional[float] = None) -> TestRun:
         seconds=elapsed,
         warnings=warnings,
     )
+
+
+def _relative(text: str, root: Path) -> str:
+    """Strip the sandbox's own location out of pytest's output.
+
+    Two reasons, and the second is the one that bit. It is noise to a reader —
+    every path in a failure is prefixed with where the repository happens to
+    live. And the output goes to a model, which read
+    ``/Users/.../workspace/school/tests/test_attendance.py`` out of a traceback
+    and wrote its fix to ``workspace/school/models.py`` *relative to the
+    sandbox*, creating ``workspace/school/workspace/school/models.py``. Legal,
+    confined, and junk. A model that only ever sees ``tests/test_x.py`` writes
+    back ``tests/test_x.py``.
+    """
+    return text.replace(f"{root}/", "").replace(str(root), ".")
 
 
 def _trim(text: str) -> str:
