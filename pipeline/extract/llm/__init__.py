@@ -66,6 +66,17 @@ VERIFY = "verify"
 #: the site then paid tier 3. openai/gpt-oss-120b learned two of the three from
 #: the same skeleton, which is enough to store and replay.
 SELECTOR = "selector"
+#: Writing source code. Its own role, and the only one in this project whose
+#: setting defaults to the hosted model rather than to LLM_BACKEND.
+#:
+#: The reason is capacity, not preference. A build is several files that have to
+#: import each other and agree on their types, and llama3.2:3b on an 8 GB
+#: machine does not hold a contract across five generations -- the failure is
+#: not a worse file, it is four modules that do not compose, which makes the
+#: whole build worthless rather than weaker. Falling back to local is still
+#: correct when the hosted model is unreachable; the caller is warned that the
+#: output should be read as a sketch.
+CODE = "code"
 
 
 def get_backend(
@@ -101,7 +112,7 @@ def get_backend(
         # preference for the same reason interactive is: an unreachable
         # hosted model should make the pipeline slower and worse at tier 2,
         # not stop it extracting.
-        if explicit or role not in (INTERACTIVE, SELECTOR) or fallback == choice:
+        if explicit or role not in (INTERACTIVE, SELECTOR, CODE) or fallback == choice:
             raise
         log.warning("llm.interactive_unavailable", wanted=choice, using=fallback)
         return _resolve(fallback)
@@ -134,11 +145,18 @@ def _configured(role: str) -> str:
         return config.LLM_VERIFY_BACKEND
     if role == SELECTOR and config.LLM_SELECTOR_BACKEND:
         return config.LLM_SELECTOR_BACKEND
+    if role == CODE and config.LLM_CODE_BACKEND:
+        return config.LLM_CODE_BACKEND
     return config.LLM_BACKEND
 
 
-def get_agent_backend(*, local_only: bool = False):
+def get_agent_backend(*, local_only: bool = False, role: str = AGENT):
     """A backend ready to be given tools, for the loop.
+
+    ``role`` chooses which setting decides the backend. It defaults to AGENT,
+    which is every existing caller; a build passes CODE, because writing five
+    files that import each other and picking which corpus tool to call next are
+    different enough jobs to deserve different models.
 
     Two things happen here that :func:`get_backend` does not do.
 
@@ -156,7 +174,7 @@ def get_agent_backend(*, local_only: bool = False):
     """
     from .toolshim import shim_if_needed
 
-    backend = get_backend(local_only=local_only, role=AGENT)
+    backend = get_backend(local_only=local_only, role=role)
 
     wanted = config.AGENT_MODEL_NAME
     if wanted and backend.name == "ollama" and backend.model != wanted:
@@ -224,6 +242,7 @@ def status() -> dict:
 __all__ = [
     "AGENT",
     "BULK",
+    "CODE",
     "SELECTOR",
     "VERIFY",
     "GroqBackend",
