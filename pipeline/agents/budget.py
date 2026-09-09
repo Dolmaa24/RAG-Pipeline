@@ -39,6 +39,11 @@ class Budget:
     #: are decisions the caller makes, never the model.
     network_calls: int = 0
     write_calls: int = 0
+    #: Source files this run may write, and test runs it may start. Zero for
+    #: both, like the two above: a retrieval run cannot reach either, and only
+    #: a build request grants them.
+    code_calls: int = 0
+    execute_calls: int = 0
 
     @classmethod
     def from_config(cls) -> "Budget":
@@ -56,6 +61,10 @@ class Budget:
             allowed.append(Effect.NETWORK)
         if self.write_calls > 0:
             allowed.append(Effect.WRITE)
+        if self.code_calls > 0:
+            allowed.append(Effect.CODE)
+        if self.execute_calls > 0:
+            allowed.append(Effect.EXECUTE)
         return allowed
 
 
@@ -68,6 +77,8 @@ class Spend:
     tokens: int = 0
     network_calls: int = 0
     write_calls: int = 0
+    code_calls: int = 0
+    execute_calls: int = 0
     started: float = field(default_factory=time.perf_counter)
 
     @property
@@ -84,6 +95,10 @@ class Spend:
             self.network_calls += 1
         elif effect is Effect.WRITE:
             self.write_calls += 1
+        elif effect is Effect.CODE:
+            self.code_calls += 1
+        elif effect is Effect.EXECUTE:
+            self.execute_calls += 1
 
     def exhausted(self, budget: Budget) -> str:
         """Why the run must stop, or "" if it may continue.
@@ -123,6 +138,10 @@ def would_exceed_effect_budget(spend: Spend, budget: Budget, effect: Effect) -> 
         return f"no network calls left (limit {budget.network_calls})"
     if effect is Effect.WRITE and spend.write_calls >= budget.write_calls:
         return f"no write calls left (limit {budget.write_calls})"
+    if effect is Effect.CODE and spend.code_calls >= budget.code_calls:
+        return f"no source files left to write (limit {budget.code_calls})"
+    if effect is Effect.EXECUTE and spend.execute_calls >= budget.execute_calls:
+        return f"no test runs left (limit {budget.execute_calls})"
     return ""
 
 

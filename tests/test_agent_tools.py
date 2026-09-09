@@ -48,6 +48,12 @@ EXPECTED = {
     "extract_url": Effect.WRITE,
     "crawl_site": Effect.WRITE,
     "index_document": Effect.WRITE,
+    # The build tools. Registered always and reachable only from a build,
+    # because effects — not registration — are what gates them.
+    "write_source": Effect.CODE,
+    "read_source": Effect.CODE,
+    "list_workspace": Effect.CODE,
+    "run_tests": Effect.EXECUTE,
 }
 
 

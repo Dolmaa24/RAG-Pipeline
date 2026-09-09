@@ -37,6 +37,16 @@ class Effect(str, Enum):
     #: Changes the corpus. Off unless the request opted in, and returns a task
     #: id rather than blocking.
     WRITE = "write"
+    #: Writes a source file into a build's sandbox. Off unless the request
+    #: opted in. Distinct from WRITE because the thing at risk is different: a
+    #: corpus write adds a document you can delete, and this puts a file on
+    #: disk that something may later run.
+    CODE = "code"
+    #: Runs code the model wrote. The most dangerous thing here, and separate
+    #: from CODE on purpose: a build may produce a scaffold for a person to
+    #: read without any of it being executed, and that is the default. Granting
+    #: the ability to write is not granting the ability to run.
+    EXECUTE = "execute"
 
 
 #: What a caller gets by default. Deliberately the least dangerous set: a run
