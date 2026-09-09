@@ -373,3 +373,95 @@ def test_a_non_python_file_gets_no_test():
     from pipeline.agents.builder import _files_for
 
     assert _files_for(BuildAgent("d", "docs", ("GUIDE.md",))) == ["GUIDE.md"]
+
+
+# --- two backends, one build ------------------------------------------------
+
+
+class Named:
+    """A backend that knows its own name, and writes nothing."""
+
+    def __init__(self, name: str, model: str = "m") -> None:
+        self.name, self.model = name, model
+        self.calls = 0
+
+    def complete_with_tools(self, *, messages, tools, tool_choice="auto"):
+        self.calls += 1
+        return ToolTurn(text="done", backend=self.name, model=self.model)
+
+
+def test_the_contract_and_the_workers_use_different_models(workspace, skill, monkeypatch):
+    """The whole point of the split. One hosted call designs the types every
+    worker is written against; the workers are one call per file and are what
+    exhaust a tokens-per-minute allowance, so they stay local."""
+    import pipeline.extract.llm as llm
+
+    chosen: list[str] = []
+
+    def fake(*, local_only=False, role="agent", model=None):
+        chosen.append(role)
+        return Named("groq" if role == "architect" else "ollama")
+
+    monkeypatch.setattr(llm, "get_agent_backend", fake)
+    result = Builder(skill, intent="x", budget=Budget(code_calls=5)).build()
+
+    assert chosen[0] == "architect"
+    assert "code" in chosen
+    by_name = {step.name: step for step in result.steps}
+    assert by_name["contract"].backend == "groq"
+    assert by_name["receptionist"].backend == "ollama"
+
+
+def test_each_backend_is_resolved_once(workspace, skill, monkeypatch):
+    """Three workers must not load three copies of a local model."""
+    import pipeline.extract.llm as llm
+
+    calls: list[str] = []
+
+    def fake(*, local_only=False, role="agent", model=None):
+        calls.append(role)
+        return Named(role)
+
+    monkeypatch.setattr(llm, "get_agent_backend", fake)
+    Builder(skill, intent="x", budget=Budget(code_calls=5)).build()
+    assert sorted(calls) == ["architect", "code"]
+
+
+def test_the_code_role_asks_for_the_coding_model(workspace, skill, monkeypatch):
+    """llama3.2:3b picks tools well and writes poor Python."""
+    import pipeline.extract.llm as llm
+
+    asked: dict = {}
+
+    def fake(*, local_only=False, role="agent", model=None):
+        asked[role] = model
+        return Named(role)
+
+    monkeypatch.setattr(llm, "get_agent_backend", fake)
+    Builder(skill, intent="x", budget=Budget(code_calls=5)).build()
+    assert asked["code"] == config.CODE_MODEL_NAME
+    assert asked["architect"] is None
+
+
+def test_an_explicit_backend_overrides_both(workspace, skill):
+    """One model end to end, which is what every other test here does."""
+    backend = Scripted()
+    result = Builder(skill, intent="x", budget=Budget(code_calls=5), backend=backend).build()
+    assert {step.backend for step in result.steps} == {"scripted"}
+
+
+def test_an_unreachable_model_falls_back_and_says_so(workspace, skill, monkeypatch):
+    """A build that cannot reach Ollama should run on what it can, not fail —
+    but the contract falling back is worth saying out loud."""
+    import pipeline.extract.llm as llm
+
+    def fake(*, local_only=False, role="agent", model=None):
+        if role == "code":
+            raise RuntimeError("ollama is not running")
+        return Named("groq")
+
+    monkeypatch.setattr(llm, "get_agent_backend", fake)
+    result = Builder(skill, intent="x", budget=Budget(code_calls=5)).build()
+
+    assert any("unavailable" in w for w in result.warnings)
+    assert next(s for s in result.steps if s.name == "receptionist").backend == "groq"

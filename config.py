@@ -169,12 +169,25 @@ class EngineConfig(BaseSettings):
     #: the pipeline to spend a hosted model, and the one where a 3B model's
     #: habit of inventing attributes costs the most. Unset follows LLM_BACKEND.
     LLM_SELECTOR_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
-    #: Which backend writes generated source. Defaults to the hosted model
-    #: rather than following LLM_BACKEND, and that is the one place in this
-    #: project where the hosted default is the right one: a 3B model on an 8 GB
-    #: machine does not write a coherent multi-file application, and the whole
-    #: output of a build is judged on whether the files compose.
-    LLM_CODE_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = "groq"
+    #: Which backend writes the individual source files. Local by default, and
+    #: that is a measurement rather than a preference. A build is one call per
+    #: file; on Groq's free tier -- 8000 tokens a minute -- the contract call
+    #: plus two workers exhausted the allowance, and every step after it waited
+    #: 25 seconds to make one call. A four-worker build produced three modules
+    #: and not one test. Local calls are slower per file and unmetered, which
+    #: is the trade a build wants.
+    LLM_CODE_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = None
+    #: Which backend designs the shared types every worker is written against.
+    #: Hosted by default, and the only setting here that is: it is one call per
+    #: build, and it decides whether the files compose at all. The same
+    #: reasoning as LLM_SELECTOR_BACKEND -- spend hosted tokens where one call
+    #: is replayed across many.
+    LLM_ARCHITECT_BACKEND: Optional[Literal["auto", "ollama", "groq"]] = "groq"
+    #: The local model that writes source, when the code backend is Ollama.
+    #: A coding model rather than the tool-calling one: llama3.2:3b picks tools
+    #: well and writes poor Python. Falls back to AGENT_MODEL_NAME with a
+    #: warning when it is not pulled.
+    CODE_MODEL_NAME: str = "qwen2.5-coder:3b"
     #: The agent loop's ceiling. These are not a safety net: the tool-calling
     #: benchmark found the local models never decide they are finished, so the
     #: turn limit is what ends a run. See pipeline/agents/budget.py.

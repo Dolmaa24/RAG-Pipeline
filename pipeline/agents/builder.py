@@ -131,6 +131,11 @@ class BuildStep:
     tools: list[str] = field(default_factory=list)
     seconds: float = 0.0
     note: str = ""
+    #: Which model wrote this. A build spans two backends by design, and a
+    #: report that does not say which wrote what cannot explain why one step
+    #: is good and another is not.
+    backend: str = ""
+    model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -138,6 +143,8 @@ class BuildStep:
             "purpose": self.purpose,
             "declared": self.declared,
             "files": self.files,
+            "backend": self.backend,
+            "model": self.model,
             "stopped": self.stopped,
             "tools": self.tools,
             "seconds": round(self.seconds, 2),
@@ -191,17 +198,42 @@ class Builder:
         self._backend = backend
         self._on_progress = on_progress
         self._warnings: list[str] = []
+        self._resolved: dict[str, Any] = {}
 
-    @property
-    def backend(self):
-        if self._backend is None:
-            from pipeline.extract.llm import CODE, get_agent_backend
+    def _backend_for(self, role: str):
+        """The model for this kind of step.
 
-            # The agent backend, because these steps call tools; the CODE role
-            # decides which one, and a fallback to local is worth saying out
-            # loud rather than leaving in a log.
-            self._backend = get_agent_backend(role=CODE)
-        return self._backend
+        Two of them, by design. The contract is one call per build and every
+        worker is written against it, so it goes to the hosted model where the
+        leverage is. The workers are one call per file and are what exhaust a
+        tokens-per-minute allowance, so they stay local and unmetered.
+
+        An explicitly supplied backend overrides both — the tests pass one, and
+        so does anyone who wants a single model end to end.
+        """
+        if self._backend is not None:
+            return self._backend
+        if role in self._resolved:
+            return self._resolved[role]
+
+        from pipeline.extract.llm import ARCHITECT, CODE, get_agent_backend
+
+        model = config.CODE_MODEL_NAME if role == CODE else None
+        try:
+            backend = get_agent_backend(role=role, model=model)
+        except Exception as exc:
+            # A build that cannot reach its preferred model should fall back
+            # and say so, not fail. The contract falling back to a small local
+            # model is worth a warning: it is the step everything else rests on.
+            log.warning("agents.builder.backend_unavailable", role=role, error=repr(exc))
+            self._warnings.append(
+                f"the {role} model was unavailable ({exc}); "
+                "the build ran on whatever else was reachable"
+            )
+            backend = get_agent_backend(role=ARCHITECT if role == CODE else CODE)
+
+        self._resolved[role] = backend
+        return backend
 
     def build(self) -> BuildResult:
         result = BuildResult(intent=self.intent, skill=self.skill.name)
@@ -274,12 +306,15 @@ class Builder:
             f"The workers who will write it:\n{roster}\n\n"
             "Write models.py and README.md now."
         )
+        from pipeline.extract.llm import ARCHITECT
+
         return self._run_step(
             BuildStep(name="contract", purpose="the shared types and the interfaces"),
             system=_CONTRACT_SYSTEM,
             prompt=prompt,
             root=root,
             effects=(Effect.CODE,),
+            role=ARCHITECT,
         )
 
     def _worker(self, agent: BuildAgent, root: Path) -> BuildStep:
@@ -350,11 +385,16 @@ class Builder:
         prompt: str,
         root: Path,
         effects: tuple[Effect, ...],
+        role: str = "code",
     ) -> BuildStep:
         before = set(sandbox.tree(root))
 
+        backend = self._backend_for(role)
+        step.backend = getattr(backend, "name", "?")
+        step.model = getattr(backend, "model", "?")
+
         loop = AgentLoop(
-            backend=self.backend,
+            backend=backend,
             budget=self._step_budget(),
             system=system,
         )

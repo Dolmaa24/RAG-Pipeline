@@ -119,6 +119,10 @@ def render_build(payload: dict) -> None:
     for step in payload.get("steps") or []:
         wrote = ", ".join(step.get("files") or []) or "nothing"
         line = f"**{step['name']}** — {wrote}"
+        if step.get("model"):
+            # A build spans two models by design, so a report that does not say
+            # which wrote what cannot explain why one step is better.
+            line += f"  \n<span style='color:#888'>{step.get('backend','')} · {step['model']}</span>"
         if step.get("note"):
             line += f"  \n<span style='color:#c60'>{step['note']}</span>"
         if step.get("purpose"):

@@ -214,10 +214,20 @@ def run_tests(root: Path, *, timeout: Optional[float] = None) -> TestRun:
 
     elapsed = time.perf_counter() - started
     output = _trim((completed.stdout or "") + (completed.stderr or ""))
-    # pytest exits 5 when it collected nothing, which is not a failing suite —
-    # it is a build that wrote no tests, and saying so is more use than "failed".
+    # pytest exits 5 when it collected nothing, which is not a failing suite.
+    # Which of the two reasons it is matters to whoever reads the report, and
+    # they call for different fixes: a build that wrote no test files at all,
+    # or one that wrote files holding no tests. A small local model does the
+    # second — measured, qwen2.5:3b wrote `tests/test_order_taker.py`
+    # containing the single line `import order_taker`.
     if completed.returncode == 5:
-        warnings.append("no tests were collected; the build wrote none")
+        written = [name for name in tree(root) if Path(name).name.startswith("test_")]
+        if written:
+            warnings.append(
+                f"{', '.join(written)} contain no test functions, so nothing ran"
+            )
+        else:
+            warnings.append("no tests were collected; the build wrote none")
 
     log.info(
         "sandbox.tests",

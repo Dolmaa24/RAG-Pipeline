@@ -77,6 +77,18 @@ SELECTOR = "selector"
 #: correct when the hosted model is unreachable; the caller is warned that the
 #: output should be read as a sketch.
 CODE = "code"
+#: Designing the shared types and interfaces a build is written against, once.
+#: The same shape as SELECTOR and justified the same way: it costs **one call
+#: per build**, and every worker after it is written against its output, so a
+#: hosted model here is affordable in a way it is not for the workers.
+#:
+#: The split is what makes a build finish on a free tier at all. Measured on
+#: Groq's 8000 tokens a minute, the contract call plus two workers exhausted
+#: the minute's allowance and every step after it waited 25 seconds for one
+#: model call -- a four-worker build produced three modules and no tests. Local
+#: workers do not consume that budget, so the hosted call goes where the
+#: leverage is and nowhere else.
+ARCHITECT = "architect"
 
 
 def get_backend(
@@ -112,7 +124,7 @@ def get_backend(
         # preference for the same reason interactive is: an unreachable
         # hosted model should make the pipeline slower and worse at tier 2,
         # not stop it extracting.
-        if explicit or role not in (INTERACTIVE, SELECTOR, CODE) or fallback == choice:
+        if explicit or role not in (INTERACTIVE, SELECTOR, CODE, ARCHITECT) or fallback == choice:
             raise
         log.warning("llm.interactive_unavailable", wanted=choice, using=fallback)
         return _resolve(fallback)
@@ -147,10 +159,14 @@ def _configured(role: str) -> str:
         return config.LLM_SELECTOR_BACKEND
     if role == CODE and config.LLM_CODE_BACKEND:
         return config.LLM_CODE_BACKEND
+    if role == ARCHITECT and config.LLM_ARCHITECT_BACKEND:
+        return config.LLM_ARCHITECT_BACKEND
     return config.LLM_BACKEND
 
 
-def get_agent_backend(*, local_only: bool = False, role: str = AGENT):
+def get_agent_backend(
+    *, local_only: bool = False, role: str = AGENT, model: Optional[str] = None
+):
     """A backend ready to be given tools, for the loop.
 
     ``role`` chooses which setting decides the backend. It defaults to AGENT,
@@ -176,7 +192,7 @@ def get_agent_backend(*, local_only: bool = False, role: str = AGENT):
 
     backend = get_backend(local_only=local_only, role=role)
 
-    wanted = config.AGENT_MODEL_NAME
+    wanted = model or config.AGENT_MODEL_NAME
     if wanted and backend.name == "ollama" and backend.model != wanted:
         candidate = OllamaBackend(model=wanted)
         if candidate.available():
@@ -242,6 +258,7 @@ def status() -> dict:
 __all__ = [
     "AGENT",
     "BULK",
+    "ARCHITECT",
     "CODE",
     "SELECTOR",
     "VERIFY",

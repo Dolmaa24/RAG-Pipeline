@@ -987,13 +987,38 @@ Files land in `workspace/<skill>/`, gitignored. Builds run on their own Celery
 queue, because a build is several whole-file generations and would otherwise sit
 in front of every investigation.
 
-`LLM_CODE_BACKEND` defaults to Groq — the only setting in this project whose
-default is the hosted model. It is a capacity judgement, not a preference:
-`llama3.2:3b` on an 8 GB machine does not hold a contract across five
-generations, and the failure is not a worse file but modules that do not import
-each other.
-
 **Expect a plausible scaffold, not a working application.**
+
+### One build, two models
+
+A build spans two backends, and where the split falls was decided by
+measurement rather than taste.
+
+| Step | Role | Default | Why |
+|---|---|---|---|
+| contract | `ARCHITECT` | Groq | **One call per build**, and every worker is written against its output |
+| workers, tests | `CODE` | Ollama | **One call per file** — the calls that exhaust a per-minute allowance |
+
+The first version put everything on Groq. On the free tier — 8000 tokens a
+minute — the contract call plus two workers exhausted the minute's allowance,
+and every step after it waited 25 seconds to make a single model call. A
+four-worker build produced three modules and not one test, three times running,
+unchanged by trimming the prompts or asking for the files in one turn.
+
+So the hosted call goes where one call is replayed across many, which is the
+same argument `LLM_SELECTOR_BACKEND` already makes about learning a domain's
+selectors once. Local calls are slower per file and unmetered, which is the
+trade a build wants.
+
+`CODE_MODEL_NAME` defaults to `qwen2.5-coder:3b` rather than the tool-calling
+model: `llama3.2:3b` picks tools well and writes poor Python. Pull it with
+`ollama pull qwen2.5-coder:3b`, or point the setting at whatever coding model
+fits your machine. Set `LLM_CODE_BACKEND=groq` to put the whole build on the
+hosted model, and expect the rate limiting described above unless you are on a
+paid tier.
+
+Each step reports which backend and model wrote it, so a report explains why
+one part of a build is better than another.
 
 ### Writing code and running it are separate permissions
 

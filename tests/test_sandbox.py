@@ -203,7 +203,21 @@ def test_no_tests_at_all_says_so_rather_than_failing(root):
     to a reader than "the tests failed"."""
     run = sandbox.run_tests(root)
     assert run.exit_code == 5
-    assert any("no tests" in w for w in run.warnings)
+    assert any("wrote none" in w for w in run.warnings)
+
+
+def test_a_test_file_holding_no_tests_is_reported_differently(root):
+    """The two exit-5 cases call for different fixes, and a small local model
+    produces the second: measured, qwen2.5:3b wrote a test file containing the
+    single line `import order_taker`."""
+    (root / "tests").mkdir()
+    (root / "tests" / "test_orders.py").write_text("import orders\n")
+    (root / "orders.py").write_text("x = 1\n")
+
+    run = sandbox.run_tests(root)
+    assert run.exit_code == 5
+    assert any("no test functions" in w for w in run.warnings)
+    assert not any("wrote none" in w for w in run.warnings)
 
 
 def test_enormous_output_is_trimmed(root):

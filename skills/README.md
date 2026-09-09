@@ -177,6 +177,14 @@ subprocess, not a container.
 
 Expect a plausible scaffold, not a working application.
 
+A build uses two models. The **contract** step goes to the hosted one — it is a
+single call and everything else is written against it — while the **workers**
+run locally, because they are one call per file and are what exhaust a
+tokens-per-minute allowance. Measured on Groq's free tier, putting the whole
+build there left every step waiting 25 seconds for one call, and a four-worker
+build produced three modules and no tests. Each step reports which model wrote
+it.
+
 ## One skill at a time
 
 An intent activates one skill, not several. That is deliberate: the tool-calling
