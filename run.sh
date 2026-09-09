@@ -5,6 +5,7 @@
 #   ./run.sh worker-io    # I/O worker only (threads, high concurrency)
 #   ./run.sh worker-cpu   # CPU/GPU worker only (Whisper, LLM, Chromium)
 #   ./run.sh worker-agents # investigation worker only (threads, model calls)
+#   ./run.sh worker-build  # build worker only (writes generated code)
 #   ./run.sh mcp          # MCP server over stdio (add --http for the HTTP one)
 #   ./run.sh api
 #   ./run.sh dashboard
@@ -70,6 +71,20 @@ worker_agents() {
     --hostname=agents@%h --loglevel=info
 }
 
+worker_build() {
+  # Its own queue, and therefore its own worker. A build is five or more
+  # whole-file generations and runs for minutes; on the agents queue it would
+  # sit in front of every investigation, which is the head-of-line blocking
+  # that queue was split off to avoid in the first place.
+  #
+  # Concurrency 1: two builds at once means two model clients and two pytest
+  # subprocesses on a machine that is already holding an embedder.
+  check_redis
+  exec "$VENV/celery" -A celery_app worker \
+    --queues=build --pool=threads --concurrency=1 \
+    --hostname=build@%h --loglevel=info
+}
+
 api()       { exec "$VENV/uvicorn" app:app --host 127.0.0.1 --port 8000 --reload; }
 # Not part of `all`: an MCP client spawns its own copy over stdio, and a
 # long-lived one is only wanted for the HTTP transport.
@@ -83,6 +98,7 @@ all() {
   "$0" worker-io     & sleep 1
   "$0" worker-cpu    & sleep 1
   "$0" worker-agents & sleep 1
+  "$0" worker-build  & sleep 1
   "$0" api        & sleep 2
   "$0" dashboard  &
   echo
@@ -98,10 +114,11 @@ case "${1:-all}" in
   worker-io)  worker_io ;;
   worker-cpu) worker_cpu ;;
   worker-agents) worker_agents ;;
+  worker-build) worker_build ;;
   api)        api ;;
   dashboard)  dashboard ;;
   flower)     flower ;;
   mcp)        shift; mcp "$@" ;;
   all)        all ;;
-  *) echo "usage: $0 [all|worker-io|worker-cpu|worker-agents|api|dashboard|flower|mcp]" >&2; exit 2 ;;
+  *) echo "usage: $0 [all|worker-io|worker-cpu|worker-agents|worker-build|api|dashboard|flower|mcp]" >&2; exit 2 ;;
 esac

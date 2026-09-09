@@ -247,3 +247,23 @@ def test_an_unmatched_intent_points_at_drafting(client, installed, queued):
 def test_an_unknown_skill_is_a_400(client, installed, queued):
     response = client.post("/api/v1/build", json={"skill": "finance"})
     assert response.status_code == 400
+
+
+def test_every_routed_queue_has_a_worker_that_consumes_it():
+    """A task routed to a queue nothing listens on is queued for ever.
+
+    The build queue was added and its worker was not, so POST /api/v1/build
+    returned 202 and the Build tab spun until the poll timed out — a failure
+    with no error anywhere, which is the worst shape a failure can take.
+    """
+    import re
+    from pathlib import Path
+
+    from celery_app import celery_app
+
+    run_sh = (Path(__file__).resolve().parents[1] / "run.sh").read_text()
+    served = set(re.findall(r"--queues=([a-z,]+)", run_sh))
+    served = {queue for group in served for queue in group.split(",")}
+
+    routed = {route["queue"] for route in celery_app.conf.task_routes.values()}
+    assert routed <= served, f"no worker consumes: {sorted(routed - served)}"
