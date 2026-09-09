@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 from observability import get_logger
 
-from .base import LLMBackend, Message, ToolRequest, ToolTurn
+from .base import LLMBackend, Message, ToolRequest, ToolTurn, extract_json_object
 
 log = get_logger("llm.toolshim")
 
@@ -225,13 +225,32 @@ def _looks_like_a_missed_call(text: str, tools: list[dict]) -> bool:
     failed, and asking the same way again cannot fix it.
 
     Deliberately narrow. An answer that merely mentions a tool by name is not
-    this: the text has to open as a JSON object *and* name a tool from the
+    this: the text has to *contain a JSON object* naming a tool from the
     catalog before a run pays for a second call.
+
+    Contain, not open with. The first version of this required the text to
+    start with ``{``, and neither model that needs it does. Measured against
+    the same worker prompt:
+
+        qwen2.5-coder:3b   ```json\n{"name": "write_source", ...
+        llama3.2:3b        Here are the JSON function calls...\n\n{"name": ...
+
+    A fence and a sentence of preamble, so the check never fired and every one
+    of those turns was discarded. ``base`` already carries the two helpers for
+    exactly this shape, and this reuses them rather than adding a third
+    opinion about where a model's JSON begins.
     """
     stripped = (text or "").strip()
-    if not stripped.startswith("{"):
+    if not stripped:
         return False
-    return any(tool.get("name", "") in stripped for tool in tools)
+
+    try:
+        candidate = extract_json_object(stripped)
+    except Exception:
+        return False
+    if not candidate.startswith(("{", "[")):
+        return False
+    return any(tool.get("name", "") in candidate for tool in tools)
 
 
 class AdaptiveToolBackend:

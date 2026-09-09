@@ -424,3 +424,64 @@ def test_the_fallback_is_permanent_so_a_run_pays_for_it_once():
     assert inner.native_calls == 1
     assert inner.json_calls == 3
     assert backend.name == "pretender+shim"
+
+
+# --- a missed call that does not begin with a brace -------------------------
+
+
+def test_a_fenced_tool_call_is_recognised_as_a_missed_call():
+    """qwen2.5-coder:3b wraps it in a ```json fence.
+
+    The first version of the detector required the text to start with "{", and
+    neither local model that needs it does — so the check never fired and every
+    one of those turns was discarded. Measured against a build worker prompt,
+    this exact shape came back and wrote nothing.
+    """
+    from pipeline.extract.llm.toolshim import _looks_like_a_missed_call
+
+    text = '```json\n{"name": "write_source", "arguments": {"path": "a.py"}}\n```'
+    assert _looks_like_a_missed_call(text, [{"name": "write_source"}])
+
+
+def test_a_tool_call_after_a_sentence_of_preamble_is_recognised():
+    """llama3.2:3b announces it first: "Here are the JSON function calls"."""
+    from pipeline.extract.llm.toolshim import _looks_like_a_missed_call
+
+    text = (
+        "Here are the JSON function calls for the files you requested:\n\n"
+        '{"name":"write_source","parameters":{"path":"order_taker.py"}}'
+    )
+    assert _looks_like_a_missed_call(text, [{"name": "write_source"}])
+
+
+def test_a_bare_object_is_still_recognised():
+    from pipeline.extract.llm.toolshim import _looks_like_a_missed_call
+
+    assert _looks_like_a_missed_call(
+        '{"name": "search_corpus", "arguments": {}}', [{"name": "search_corpus"}]
+    )
+
+
+def test_an_answer_mentioning_a_tool_is_not_a_missed_call():
+    """The detector permanently downgrades a model, so it stays narrow: naming
+    a tool in prose is not the same as emitting one."""
+    from pipeline.extract.llm.toolshim import _looks_like_a_missed_call
+
+    assert not _looks_like_a_missed_call(
+        "I used write_source to write the file.", [{"name": "write_source"}]
+    )
+
+
+def test_json_naming_no_tool_is_not_a_missed_call():
+    from pipeline.extract.llm.toolshim import _looks_like_a_missed_call
+
+    assert not _looks_like_a_missed_call('{"result": "done"}', [{"name": "write_source"}])
+
+
+def test_a_fenced_code_block_is_not_a_missed_call():
+    """A model answering with code, which is common in a build."""
+    from pipeline.extract.llm.toolshim import _looks_like_a_missed_call
+
+    assert not _looks_like_a_missed_call(
+        "```\ndef take_order():\n    pass\n```", [{"name": "write_source"}]
+    )
