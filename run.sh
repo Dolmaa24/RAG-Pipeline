@@ -141,6 +141,8 @@ all() {
   wait
 }
 
+# --reload may appear anywhere; strip it out and leave the rest as the
+# positional arguments, so `mcp --http` still reaches the mcp target.
 ARGS=()
 for arg in "$@"; do
   case "$arg" in
@@ -149,7 +151,12 @@ for arg in "$@"; do
   esac
 done
 export RELOAD="${RELOAD:-0}"
-set -- "${ARGS[@]}"
+# `${ARGS[@]+...}` and not a plain `"${ARGS[@]}"`. macOS ships bash 3.2, where
+# expanding an *empty* array under `set -u` counts as an unbound variable —
+# bash 4.4 fixed it, and macOS will not be shipping bash 4.4. Without the
+# guard, `./run.sh` with no arguments at all, which is the ordinary way to run
+# it, dies here with "ARGS[@]: unbound variable".
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 case "${1:-all}" in
   worker-io)  worker_io ;;
